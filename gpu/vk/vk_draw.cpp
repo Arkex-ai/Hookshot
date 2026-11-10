@@ -3970,22 +3970,51 @@ VkPipeline clear_pipeline(const Targets& at, int index, uint32_t mask, int kind)
     key = mix(key, (uint64_t)at.depth_format);
     auto it = clear_pipes.find(key);
     if (it != clear_pipes.end()) return it->second;
+    // Keep failed keys retryable without recreating the same failed resources for every clear.
+    // The caller's replay lock also serializes this state and the owning cache.
+    static uint64_t failed_frame = UINT64_MAX;
+    static std::unordered_set<uint64_t> failed;
+    static bool tracking_failed = false;
+    const uint64_t frame = texture_frame_no();
+    if (failed_frame != frame) {
+        failed.clear();
+        failed_frame = frame;
+        tracking_failed = false;
+    }
+    if (tracking_failed || failed.count(key)) return VK_NULL_HANDLE;
+    auto remember_failure = [&] {
+        try { failed.insert(key); } catch (const std::exception&) { tracking_failed = true; }
+    };
     if (!clear_layout) {
         const VkPushConstantRange r{VK_SHADER_STAGE_FRAGMENT_BIT, 0, 16};
         VkPipelineLayoutCreateInfo li{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
         li.pushConstantRangeCount = 1;
         li.pPushConstantRanges = &r;
-        vkCreatePipelineLayout(dev.device, &li, nullptr, &clear_layout);
+        VkPipelineLayout made = VK_NULL_HANDLE;
+        if (vkCreatePipelineLayout(dev.device, &li, nullptr, &made) != VK_SUCCESS) {
+            remember_failure();
+            return VK_NULL_HANDLE;   // (the failure output is undefined)
+        }
+        clear_layout = made;
     }
     const uint32_t* fw = kind == 1 ? CLEAR_U_FRAG_SPV : kind == 2 ? CLEAR_I_FRAG_SPV : CLEAR_F_FRAG_SPV;
     const size_t fn = (kind == 1 ? sizeof CLEAR_U_FRAG_SPV : kind == 2 ? sizeof CLEAR_I_FRAG_SPV : sizeof CLEAR_F_FRAG_SPV) / 4;
-    const std::vector<uint32_t> frag = spirv_location(fw, fn, (uint32_t)index);
+    std::vector<uint32_t> frag;
+    try { frag = spirv_location(fw, fn, (uint32_t)index); }
+    catch (const std::exception&) { remember_failure(); return VK_NULL_HANDLE; }
     VkShaderModuleCreateInfo mi{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
     VkShaderModule vm = VK_NULL_HANDLE, fm = VK_NULL_HANDLE;
     mi.codeSize = sizeof CLEAR_VERT_SPV, mi.pCode = CLEAR_VERT_SPV;
-    vkCreateShaderModule(dev.device, &mi, nullptr, &vm);
+    if (vkCreateShaderModule(dev.device, &mi, nullptr, &vm) != VK_SUCCESS) {
+        remember_failure();
+        return VK_NULL_HANDLE;
+    }
     mi.codeSize = frag.size() * 4, mi.pCode = frag.data();
-    vkCreateShaderModule(dev.device, &mi, nullptr, &fm);
+    if (vkCreateShaderModule(dev.device, &mi, nullptr, &fm) != VK_SUCCESS) {
+        vkDestroyShaderModule(dev.device, vm, nullptr);
+        remember_failure();
+        return VK_NULL_HANDLE;
+    }
     VkPipelineShaderStageCreateInfo st[2]{{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO},
                                           {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO}};
     st[0].stage = VK_SHADER_STAGE_VERTEX_BIT, st[0].module = vm, st[0].pName = "main";
@@ -4021,10 +4050,21 @@ VkPipeline clear_pipeline(const Targets& at, int index, uint32_t mask, int kind)
     ci.pMultisampleState = &ms, ci.pDepthStencilState = &ds, ci.pColorBlendState = &bs, ci.pDynamicState = &dy;
     ci.layout = clear_layout;
     VkPipeline pl = VK_NULL_HANDLE;
-    cached_graphics(&ci, &pl);
+    const VkResult result = cached_graphics(&ci, &pl);
     vkDestroyShaderModule(dev.device, vm, nullptr);
     vkDestroyShaderModule(dev.device, fm, nullptr);
-    clear_pipes[key] = pl;
+    if (result != VK_SUCCESS) {
+        // Pipeline creation defines non-null outputs as created objects, unlike module/layout error outputs.
+        if (pl) vkDestroyPipeline(dev.device, pl, nullptr);
+        remember_failure();
+        return VK_NULL_HANDLE;
+    }
+    try { clear_pipes.emplace(key, pl); }
+    catch (const std::exception&) {
+        vkDestroyPipeline(dev.device, pl, nullptr);   // (ownership never reached the cache)
+        remember_failure();
+        return VK_NULL_HANDLE;
+    }
     return pl;
 }
 
