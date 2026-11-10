@@ -47,9 +47,13 @@ hardware is Windows/NVIDIA; Linux GPU, AMD and Intel runtime coverage is absent.
 
 Tracked in [#1787](https://github.com/NotRexed/Hookshot/issues/1787), with the
 [Discord claim](https://discord.com/channels/1568810484818378804/1569019786766188665/1569751848121008260).
-PR #1772 changes the graphics creation call to a cache-routing wrapper. If that
-lands first, check its returned result with the same admission and retry policy;
-cache routing alone does not validate the layout/module stages or owner insertion.
+Main now includes #1772. The factory retains `cached_graphics` routing and checks
+its returned result with the same admission and retry policy. The fixture also
+extracts the actual `cached_graphics` and `create_cached` implementations, models
+the driver/cache metadata, and exercises both a cache hit and a two-query miss
+followed by compilation. All previous ownership assertions remain:33 cases.
+Cache-file persistence and caught-driver-fault semantics are separate contracts;
+these models do not certify either.
 
 Pipeline outputs follow the distinct [multiple-pipeline creation contract](https://docs.vulkan.org/spec/latest/chapters/pipelines.html#pipelines-multiple):
 nonnull returned pipelines are created objects, even when a batched call fails.
