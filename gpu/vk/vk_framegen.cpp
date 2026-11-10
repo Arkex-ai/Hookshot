@@ -337,6 +337,7 @@ bool ensure_size(VkCommandBuffer cmd, uint32_t w, uint32_t h) {
     if (!ok) {
         fg.failed = true;
         drop_size();
+        // Older submissions were drained above; ensure_size precedes every pass recorded by framegen_record.
         drop_setup();
         logf("vk: frame interpolation: its images (%ux%u) were not made: off", w, h);
         return false;
