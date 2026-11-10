@@ -3362,7 +3362,7 @@ void present_image(VkImage src, uint32_t sw, uint32_t sh, const int crop[4], VkI
         sample.crop_supplied = crop != nullptr;
         if (crop) std::copy_n(crop, 4, sample.crop.begin());
         sample.sampled_view = view != VK_NULL_HANDLE;
-        sample.host_aspect(host && host->aspect_ratio, host && host->aspect_ratio ? host->aspect_ratio() : 0);
+        sample.host_aspect(src && host && host->aspect_ratio, aspect.ratio);
         sample.kind = src ? std::min(present_kind.load(), 1u) : 2;
         sample.route = trace_route;
         sample.filter = opts.upscale;

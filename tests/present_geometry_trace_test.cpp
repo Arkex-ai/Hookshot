@@ -22,7 +22,8 @@ struct VkImageSubresourceRange { int aspect, mip, levels, layer, layers; };
 struct { struct { uint32_t width = 1720, height = 720; } swap_extent; } dev;
 struct Host { float (*aspect_ratio)(); };
 float ratio = 43.0f / 18.0f;
-float aspect_callback() { return ratio; }
+int aspect_calls = 0;
+float aspect_callback() { ++aspect_calls; return ratio; }
 Host h{aspect_callback}; Host* host = &h;
 struct { int upscale = 0, sharpness = 0, framegen = 0; } opts;
 std::atomic<uint32_t> present_kind{0};
@@ -68,6 +69,7 @@ void unit_state() {
 int main(int argc, char** argv) {
     CHECK(argc == 2); const bool enabled = std::atoi(argv[1]) != 0; unit_state();
     present(); CHECK(blits == 1 && drawn.w == 1720 && drawn.h == 720);
+    CHECK(aspect_calls == 1); // tracing reuses the actual fit input, including when the callback could change.
     if (enabled) {
         CHECK(messages.size() == 1);
         CHECK(messages.back().find("kind=game source=3440x1440") != std::string::npos);
@@ -93,7 +95,10 @@ int main(int argc, char** argv) {
     // The game stream's request-only change and alternating frames add nothing.
     for (int i = 0; i < 100; ++i) { present_kind = 0; present(1, 4096, 2160, crop); present_kind = 1; present(1, 2560, 1440); }
     CHECK(messages.size() == n);
-    scaled = false; present(0, 0, 0, nullptr, 0);
+    scaled = false;
+    const int before_startup = aspect_calls;
+    present(0, 0, 0, nullptr, 0);
+    CHECK(aspect_calls == before_startup);
     if (enabled) CHECK(messages.back().find("kind=startup") != std::string::npos && messages.back().find("route=clear") != std::string::npos);
     ratio = std::numeric_limits<float>::quiet_NaN(); present_kind = 0; present();
     if (enabled) CHECK(messages.back().find("host-aspect=invalid:0") != std::string::npos);

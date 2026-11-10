@@ -14,8 +14,10 @@ sampled-view availability, and the route selected by presentation:
 
 Filter, sharpness and frame-generation values are labeled `*-request`: configuration
 does not establish that a feature ran successfully. The route is a CPU command-recording
-decision, not a successful GPU present result. Host aspect is observed through the
-callback under presentation serialization; this diagnostic does not alter aspect policy.
+decision, not a successful GPU present result. The host-aspect field reuses the exact
+aspect passed to the destination fit, without a second callback read. No-source frames
+report it unavailable, since fitting deliberately does not query the callback then.
+This diagnostic does not alter aspect policy.
 An unavailable/invalid aspect is explicit; invalid values are normalized for stable deduplication.
 Requests accompany geometry/route changes but do not themselves trigger a line, so dragging
 a sharpness slider cannot consume the geometry-change budget while the effective route stays the same.
