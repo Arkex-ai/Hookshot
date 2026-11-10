@@ -350,7 +350,7 @@ void dump_image(VkCommandBuffer cmd, Texture* tex, uint32_t level, uint32_t laye
                            it.buffer_alloc, &it.map))
             return;
         full_barrier(cmd);
-        const VkBufferImageCopy c{0, 0, 0, {raw_9e5 ? VK_IMAGE_ASPECT_COLOR_BIT : VK_IMAGE_ASPECT_DEPTH_BIT, level,
+        const VkBufferImageCopy c{0, 0, 0, {(VkImageAspectFlags)(raw_9e5 ? VK_IMAGE_ASPECT_COLOR_BIT : VK_IMAGE_ASPECT_DEPTH_BIT), level,
                                             std::min(layer, tex->layers - 1), 1}, {0, 0, 0},
                                   {it.w, it.h, 1}};
         vkCmdCopyImageToBuffer(cmd, tex->image, VK_IMAGE_LAYOUT_GENERAL, it.buffer, 1, &c);
