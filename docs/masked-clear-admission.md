@@ -38,6 +38,13 @@ the test with `--headers <Vulkan include folder> --cxx <compiler>`; Linux also
 supports `--sanitize`. These models do not prove native OOM recovery, campaign
 coverage, visual improvements or performance gains.
 
+The proposed worklist priority is S2 x reach1.0 x confidence0.4 = 1.2. Reach
+describes the common Vulkan code path, conditional on a creation failure; player
+incidence is unmeasured. Confidence is deliberately limited to authored fault
+injection, not a reproduced native OOM or user-reported crash. This investigation
+began before the claim/worklist workflow was introduced. Available native
+hardware is Windows/NVIDIA; Linux GPU, AMD and Intel runtime coverage is absent.
+
 Pipeline outputs follow the distinct [multiple-pipeline creation contract](https://docs.vulkan.org/spec/latest/chapters/pipelines.html#pipelines-multiple):
 nonnull returned pipelines are created objects, even when a batched call fails.
 This path requests one pipeline. Layout/module failure outputs remain undefined.
