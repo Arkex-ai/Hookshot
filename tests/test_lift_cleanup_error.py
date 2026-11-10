@@ -30,7 +30,7 @@ def production():
     branches = [node for node in ast.walk(main) if isinstance(node, ast.If) and isinstance(node.test, ast.Call) and
                 isinstance(node.test.func, ast.Name) and node.test.func.id == "lifted_before"]
     assert len(branches) == 1
-    namespace = dict(os=os, sys=sys, hashlib=hashlib)
+    namespace = dict(os=os, sys=sys, hashlib=hashlib, PREPARE=False)   # (say(): RecompLauncher's --prepare lines, off as at the start)
     exec(compile(ast.Module(body=[key, *definitions], type_ignores=[]), str(SOURCE), "exec"), namespace)
     return namespace, compile(ast.Module(body=branches, type_ignores=[]), str(SOURCE), "exec")
 
