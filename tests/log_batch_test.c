@@ -38,6 +38,13 @@ static size_t out_size(void) {
     return n;
 }
 
+static volatile LONG finite_waits;
+static BOOL spy_wait(PCONDITION_VARIABLE cv, PSRWLOCK lock, DWORD timeout, ULONG flags) {
+    if (timeout != INFINITE) InterlockedIncrement(&finite_waits);
+    return SleepConditionVariableSRW(cv, lock, timeout, flags);
+}
+
+#define SleepConditionVariableSRW spy_wait
 #define fputs spy_fputs
 #define fwrite spy_fwrite
 #define fflush spy_fflush
@@ -50,6 +57,7 @@ static size_t out_size(void) {
 #undef fflush
 #undef fwrite
 #undef fputs
+#undef SleepConditionVariableSRW
 
 #define CHECK(c) do { if (!(c)) { fprintf(stderr, "FAIL line %d: %s\n", __LINE__, #c); return 1; } } while (0)
 
@@ -89,10 +97,10 @@ static int run(const char *name) {
         CHECK(wait_for(expect_len, 3000) && same());
         CHECK(GetTickCount64() - t0 >= 200);   /* (GetTickCount64 steps in 10-16 ms) */
     } else if (!strcmp(name, "off")) {   /* (HOS_LOG_BATCH_MS=0: each wake's lines at once, as before) */
-        const ULONGLONG t0 = GetTickCount64();
         CHECK(queue(0));
         CHECK(wait_for(expect_len, 3000) && same());
-        CHECK(GetTickCount64() - t0 < 200);
+        /* A busy runner can delay either thread even when the writer never waits to batch. */
+        CHECK(InterlockedCompareExchange(&finite_waits, 0, 0) == 0);
     } else if (!strcmp(name, "burst")) {   /* (HOS_LOG_BATCH_MS=2000: a queue half full goes out without the wait) */
         size_t half = 0;
         for (int i = 0; i < 1500; i++) {
