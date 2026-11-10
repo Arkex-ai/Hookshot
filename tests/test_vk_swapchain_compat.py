@@ -46,9 +46,12 @@ def check_swapchain(source):
 def check_linux_start(source):
     body = function(source, "int start(void* hwnd)")
     linux = body[body.index("#else"):body.index("#endif")]
+    factory = function(source, "bool open_window_surface() {")
+    for item in ("w->create_surface", "queue-family present support failed"):
+        if item not in factory:
+            raise SystemExit("Vulkan surface creation no longer checks %s" % item)
     for item in (
-        "w->create_surface",
-        "queue-family present support failed",
+        "open_window_surface()",
         "w->drawable_size",
         "SDL returned zero drawable size",
         "swapchain creation failed for drawable",

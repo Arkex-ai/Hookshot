@@ -75,6 +75,7 @@ struct Device {
     // the window
     VkSurfaceKHR surface = VK_NULL_HANDLE;
     VkSwapchainKHR swapchain = VK_NULL_HANDLE;
+    uint64_t swapchain_generation = 0;   // (under the presentation lock)
     VkFormat swap_format = VK_FORMAT_UNDEFINED;
     VkExtent2D swap_extent{};
     std::vector<VkImage> swap_images;
@@ -90,6 +91,7 @@ struct Device {
     // (hookshot) a queue of a compute family for vkQueuePresentKHR alone (vk_main.cpp create_device; RX_VK_PRESENT_QUEUE=0 / 1).
     // VK_NULL_HANDLE: presents go on `queue` under present_mu. Its own lock: taken after present_mu, never before it
     VkQueue present_queue = VK_NULL_HANDLE;
+    bool present_queue_supported = false;
     std::mutex present_queue_mu;
     uint32_t present_family = 0;   // (present_queue's family, the swapchain's images shared with it)
 };
@@ -293,6 +295,8 @@ void vma_log_image_blocks();   // (the image pools' blocks: what they hold, and 
 PFN_vkGetInstanceProcAddr instance_proc();   // vk_main.cpp
 
 bool create_swapchain(uint32_t width, uint32_t height);
+void retire_swapchain();   // (dev.present_mu held)
+bool invalidate_lost_surface(VkResult result);   // (dev.present_mu held)
 bool replay_start();                          // vk_replay.cpp
 bool precompile_wanted();                     // vk_draw.cpp
 void precompile_run(void (*progress)(size_t done, size_t total));
