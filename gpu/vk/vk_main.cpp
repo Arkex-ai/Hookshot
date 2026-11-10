@@ -562,7 +562,7 @@ bool invalidate_lost_surface(VkResult result) {
 }
 
 namespace {
-bool open_window_surface();
+bool open_window_surface(bool log_failure);
 void window_size(uint32_t* width, uint32_t* height);
 }
 
@@ -575,7 +575,7 @@ bool create_swapchain(uint32_t width, uint32_t height) {
         const auto now = Clock::now();
         if (now < next_attempt) return false;
         next_attempt = now + std::chrono::milliseconds(250);
-        if (!open_window_surface()) return false;
+        if (!open_window_surface(false)) return false;
     }
     VkSurfaceCapabilitiesKHR caps;
     VkResult result = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(dev.physical, dev.surface, &caps);
@@ -1030,7 +1030,7 @@ static void choose_present_queue() {
     logf("vk: presents on a queue of their own, of compute family %u (RX_VK_PRESENT_QUEUE=0: off)", dev.present_family);
 }
 
-bool open_window_surface() {
+bool open_window_surface(bool log_failure) {
     VkSurfaceKHR surface = VK_NULL_HANDLE;
 #ifdef _WIN32
     VkWin32SurfaceCreateInfoKHR si{VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR};
@@ -1040,14 +1040,15 @@ bool open_window_surface() {
 #else
     const MkwVkWindow* w = prep_window;
     if (!w || !w->create_surface(w->window, (void*)dev.instance, (void*)&surface)) {
-        logf("vk: SDL_Vulkan_CreateSurface failed; check SDL_VIDEODRIVER and the Vulkan window-system extensions");
+        if (log_failure)
+            logf("vk: SDL_Vulkan_CreateSurface failed; check SDL_VIDEODRIVER and the Vulkan window-system extensions");
         return false;
     }
 #endif
     VkBool32 ok = VK_FALSE;
     const VkResult result = vkGetPhysicalDeviceSurfaceSupportKHR(dev.physical, dev.queue_family, surface, &ok);
     if (result != VK_SUCCESS || !ok) {
-        logf("vk: queue-family present support failed (VkResult %d, supported %u)", (int)result, ok);
+        if (log_failure) logf("vk: queue-family present support failed (VkResult %d, supported %u)", (int)result, ok);
         vkDestroySurfaceKHR(dev.instance, surface, nullptr);
         return false;
     }
@@ -1068,7 +1069,7 @@ int start(void* hwnd) {
         return 1;
     }
 #ifdef _WIN32
-    if (!open_window_surface()) return 0;
+    if (!open_window_surface(true)) return 0;
     RECT r{};
     GetClientRect((HWND)hwnd, &r);
     if (!create_swapchain((uint32_t)(r.right - r.left), (uint32_t)(r.bottom - r.top))) return 0;
@@ -1079,7 +1080,7 @@ int start(void* hwnd) {
         logf("vk: unsupported SDL window bridge version %u (expected %u)", w->version, MKWVK_WINDOW_VERSION);
         return 0;
     }
-    if (!open_window_surface()) return 0;
+    if (!open_window_surface(true)) return 0;
     int width = 0, height = 0;
     w->drawable_size(w->window, &width, &height);
     if (width <= 0 || height <= 0) {
