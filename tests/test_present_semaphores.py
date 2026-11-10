@@ -59,7 +59,7 @@ constexpr VkResult VK_ERROR_SURFACE_LOST_KHR = -1000000000;
 constexpr int VK_PRESENT_MODE_MAILBOX_KHR=1, VK_PRESENT_MODE_IMMEDIATE_KHR=2;
 struct VkSemaphoreCreateInfo { int type; };
 struct Extent { uint32_t width,height; };
-struct Device { int device=1;uint64_t swapchain=0;int swap_format=0;Extent swap_extent{};bool swap_mutable=false;uint32_t swap_spare=0;
+struct Device { int device=1;uint64_t swapchain=0;int swap_format=0;Extent swap_extent{};bool swap_mutable=false;std::atomic<uint32_t> swap_spare{0};
     std::vector<VkImage> swap_images;std::vector<VkSemaphore> swap_rendered;
     std::atomic<uint64_t> swap_resize{0};std::mutex present_mu;uint64_t swapchain_generation=0;
     int instance=1;uint64_t surface=1;bool present_queue_supported=true; } dev;
@@ -140,6 +140,7 @@ struct PendingPresent {
     uint32_t index;
     uint64_t swapchain, swapchain_generation;
 };
+PendingPresent* present_defer_into=nullptr;
 unsigned committed=0, after_acquire=0;
 bool present_out(uint32_t, std::unique_lock<std::mutex>&) {++committed; return true;}
 ''' + commit + r'''
@@ -241,6 +242,18 @@ int main() {
     if(acquires!=count || dev.swapchain!=active || !dev.swap_resize.load())return 27;
     preflight_fail=false;present_begin();
     if(acquires!=count+1 || !dev.swapchain || dev.swap_resize.load())return 28;
+    // The display thread chose present-ahead on a chain with two spare images.
+    PendingPresent deferred{};
+    present_defer_into=&deferred;
+    image_count=3;
+    dev.swap_resize.store(pack(1280,720));
+    count=acquires;
+    present_begin();
+    if (dev.swap_spare!=1 || acquires!=count) return 40;
+    // The next ordinary frame can use the smaller replacement.
+    present_defer_into=nullptr;
+    present_begin();
+    if (acquires!=count+1) return 41;
     const PendingPresent pending_old{true, 0, dev.swapchain, dev.swapchain_generation};
     idle=false;
     acquire_with_result(VK_SUCCESS);
@@ -266,6 +279,7 @@ int main() {
     if(cached.swapchain || cached.latency || cached.frame_marked || cached.mode!=-1)return 26;
     std::puts("PASS: per-image semaphores, retirement, query/allocation/create failures, latest-resize retry and acquire guard");
     std::puts("PASS: acquire/present/create surface loss, ordered destruction, and deferred present invalidation with handle reuse");
+    std::puts("PASS: a smaller replacement blocks deferred acquire and allows the ordinary path");
 }
 '''
 with tempfile.TemporaryDirectory(prefix='present-semaphores-') as directory:
