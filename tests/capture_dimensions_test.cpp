@@ -1,3 +1,4 @@
+#define _CRT_SECURE_NO_WARNINGS
 #include <vulkan/vulkan.h>
 #include <algorithm>
 #include <cstdint>
@@ -26,9 +27,6 @@ bool create_buffer(uint64_t size,VkBufferUsageFlags,bool,VkBuffer& buffer,VmaAll
 VKAPI_ATTR VkResult VKAPI_CALL vkCreateImageView(VkDevice,const VkImageViewCreateInfo* ci,const VkAllocationCallbacks*,VkImageView* view) {
     calls++; require(ci->image!=VK_NULL_HANDLE,"view without image"); *view=reinterpret_cast<VkImageView>(++serial); return VK_SUCCESS;
 }
-void destroy_image(VkImage,VmaAllocation) {}
-void destroy_buffer(VkBuffer,VmaAllocation) {}
-VKAPI_ATTR void VKAPI_CALL vkDestroyImageView(VkDevice,VkImageView,const VkAllocationCallbacks*) {}
 void destroy_image(VkImage,VmaAllocation) {}
 void destroy_buffer(VkBuffer,VmaAllocation) {}
 VKAPI_ATTR void VKAPI_CALL vkDestroyImageView(VkDevice,VkImageView,const VkAllocationCallbacks*) {}
