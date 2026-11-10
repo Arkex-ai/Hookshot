@@ -11,6 +11,8 @@ sampled-view availability, and the route selected by presentation:
 - `direct`: the source blit was selected, including fallback when filtering returned no image.
 - `scaled`: the scaling function returned an image and its result was selected.
 - `clear`: presentation had no source and selected its black clear.
+- `hdr`: the HDR conversion function returned an image selected for presentation.
+  A failed converter falls back to the scaled/direct route. Native PQ input bypasses conversion.
 
 Filter, sharpness and frame-generation values are labeled `*-request`: configuration
 does not establish that a feature ran successfully. The route is a CPU command-recording

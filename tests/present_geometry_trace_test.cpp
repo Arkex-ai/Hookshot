@@ -19,7 +19,8 @@ constexpr VkImage VK_NULL_HANDLE = 0;
 constexpr int VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL = 1, VK_IMAGE_ASPECT_COLOR_BIT = 1;
 struct VkClearColorValue { float r, g, b, a; };
 struct VkImageSubresourceRange { int aspect, mip, levels, layer, layers; };
-struct { struct { uint32_t width = 1720, height = 720; } swap_extent; } dev;
+struct { struct { uint32_t width = 1720, height = 720; } swap_extent; bool hdr = false; } dev;
+std::atomic<bool> present_native_pq{false};
 struct Host { float (*aspect_ratio)(); };
 float ratio = 43.0f / 18.0f;
 int aspect_calls = 0;
@@ -28,6 +29,8 @@ Host h{aspect_callback}; Host* host = &h;
 struct { int upscale = 0, sharpness = 0, framegen = 0; } opts;
 std::atomic<uint32_t> present_kind{0};
 bool scaled = false;
+bool encoded = false;
+int hdr_calls = 0;
 int blits = 0, clears = 0;
 PresentRect drawn{};
 std::vector<std::string> messages;
@@ -36,6 +39,11 @@ void logf(const char* format, ...) {
 }
 void vkCmdClearColorImage(int, VkImage, int, const VkClearColorValue*, int, const VkImageSubresourceRange*) { ++clears; }
 void image_barrier(int, VkImage, int, int) {}
+void full_barrier(int) {}
+VkImageView framegen_scaled_view() { return 19; }
+VkImage framegen_hdr(int, VkImageView, uint32_t, uint32_t, const int*, uint32_t, uint32_t) {
+    ++hdr_calls; return encoded ? 29 : VK_NULL_HANDLE;
+}
 VkImage framegen_scale(int, VkImageView, VkImage, uint32_t, uint32_t, const int*, uint32_t, uint32_t) { return scaled ? 9 : 0; }
 void blit_crop_to_rect(int, VkImage, uint32_t, uint32_t, const int*, VkImage, int, PresentRect rect) { ++blits; drawn = rect; }
 void present(VkImage src = 1, uint32_t sw = 3440, uint32_t sh = 1440, const int* crop = nullptr, VkImageView view = 2) {
@@ -87,6 +95,14 @@ int main(int argc, char** argv) {
     CHECK(messages.size() == before_requests);
     scaled = true; present(1, 4096, 2160, crop);
     if (enabled) CHECK(messages.back().find("route=scaled view=1 filter-request=2 sharpness-request=50") != std::string::npos);
+    dev.hdr = encoded = true; present(1, 4096, 2160, crop);
+    if (enabled) CHECK(messages.back().find("route=hdr") != std::string::npos);
+    encoded = false; present(1, 4096, 2160, crop);
+    if (enabled) CHECK(messages.back().find("route=scaled") != std::string::npos);
+    encoded = true; present_native_pq = true;
+    const int before_native_pq = hdr_calls;
+    present(1, 4096, 2160, crop); CHECK(hdr_calls == before_native_pq);
+    dev.hdr = false; present_native_pq = false; encoded = false;
     opts.framegen = 2; present_kind = 1; present(1, 2560, 1440);
     if (enabled) CHECK(messages.back().find("kind=made") != std::string::npos && messages.back().find("framegen-request=2") != std::string::npos);
     const size_t n = messages.size();
