@@ -10,6 +10,7 @@
 #include <utility>
 #include <vector>
 
+namespace fixture {
 void require(bool ok, const char* why) { if (!ok) { fprintf(stderr, "FAIL: %s\n", why); std::exit(1); } }
 struct VmaAllocation_T { std::vector<uint8_t> cpu, gpu; };
 using VmaAllocation = VmaAllocation_T*;
@@ -70,7 +71,7 @@ void cpu(uint64_t n, uint8_t pattern) {
     std::memset(s.data, pattern, n); cpu_slice(s, n); consume({});
     require(copies.back().bufferOffset == s.offset, "copy and publication address same slice");
 }
-int main(int argc, char** argv) {
+int run(int argc, char** argv) {
     require(argc == 3, "case/cache arguments"); coherent = std::string(argv[2]) == "coherent";
     dev.props.limits.nonCoherentAtomSize = 1024;
     dev.props.limits.minStorageBufferOffsetAlignment = 256;
@@ -93,4 +94,7 @@ int main(int argc, char** argv) {
     } else if (test == "empty-range") {
         flush_mapped_range(nullptr, 0, 0); require(flushes == 0, "empty range no VMA call");
     } else require(false, "known case");
+    return 0;
 }
+} // namespace fixture
+int main(int argc, char** argv) { return fixture::run(argc, argv); }
