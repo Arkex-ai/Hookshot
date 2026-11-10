@@ -1,3 +1,6 @@
+#ifdef _WIN32
+#define _CRT_SECURE_NO_WARNINGS
+#endif
 #define VK_NO_PROTOTYPES
 #define VK_USE_64_BIT_PTR_DEFINES 0
 #include <vulkan/vulkan.h>
