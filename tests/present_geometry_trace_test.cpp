@@ -55,6 +55,11 @@ void unit_state() {
     s.host_aspect(true, -1); CHECK(t.note(s) == PresentTraceDecision::Quiet);
     s.host_aspect(false, 0); CHECK(t.note(s) == PresentTraceDecision::Emit);
     s.host_aspect(true, 43.0/18.0); CHECK(t.note(s) == PresentTraceDecision::Emit);
+    for (int i = 0; i < 10000; ++i) {
+        s.filter = i % 3; s.sharpness = i % 101; s.framegen = i % 6;
+        CHECK(t.note(s) == PresentTraceDecision::Quiet);
+    }
+    ++s.output[0]; CHECK(t.note(s) == PresentTraceDecision::Emit);
     PresentGeometryTrace bounded;
     for (uint32_t i = 0; i < PresentGeometryTrace::kLimit; ++i) { s.output[0] = i; CHECK(bounded.note(s) == PresentTraceDecision::Emit); }
     ++s.output[0]; CHECK(bounded.note(s) == PresentTraceDecision::Limit);
@@ -75,18 +80,19 @@ int main(int argc, char** argv) {
     if (enabled) CHECK(messages.size() == 2 && messages.back().find("output=3440x1369") != std::string::npos);
     const int crop[] = {16, 8, 2560, 1440}; present(1, 4096, 2160, crop);
     if (enabled) CHECK(messages.back().find("crop=supplied:16,8 2560x1440 content=2560x1440") != std::string::npos);
+    const size_t before_requests = messages.size();
     opts.upscale = 2; opts.sharpness = 50; present(1, 4096, 2160, crop);
-    if (enabled) CHECK(messages.back().find("route=direct view=1 filter-request=2 sharpness-request=50") != std::string::npos);
+    CHECK(messages.size() == before_requests);
     scaled = true; present(1, 4096, 2160, crop);
-    if (enabled) CHECK(messages.back().find("route=scaled") != std::string::npos);
+    if (enabled) CHECK(messages.back().find("route=scaled view=1 filter-request=2 sharpness-request=50") != std::string::npos);
     opts.framegen = 2; present_kind = 1; present(1, 2560, 1440);
     if (enabled) CHECK(messages.back().find("kind=made") != std::string::npos && messages.back().find("framegen-request=2") != std::string::npos);
     const size_t n = messages.size();
     present_kind = 0; present(1, 4096, 2160, crop);
-    present_kind = 1; present(1, 2560, 1440); CHECK(messages.size() == n + size_t(enabled));
-    // The game stream changed framegen request; alternating again adds nothing.
+    present_kind = 1; present(1, 2560, 1440); CHECK(messages.size() == n);
+    // The game stream's request-only change and alternating frames add nothing.
     for (int i = 0; i < 100; ++i) { present_kind = 0; present(1, 4096, 2160, crop); present_kind = 1; present(1, 2560, 1440); }
-    CHECK(messages.size() == n + size_t(enabled));
+    CHECK(messages.size() == n);
     scaled = false; present(0, 0, 0, nullptr, 0);
     if (enabled) CHECK(messages.back().find("kind=startup") != std::string::npos && messages.back().find("route=clear") != std::string::npos);
     ratio = std::numeric_limits<float>::quiet_NaN(); present_kind = 0; present();
@@ -94,6 +100,11 @@ int main(int argc, char** argv) {
     const size_t invalid = messages.size(); present(); CHECK(messages.size() == invalid);
     host = nullptr; present();
     if (enabled) CHECK(messages.back().find("host-aspect=unavailable:0") != std::string::npos);
+    const size_t before_slider = messages.size();
+    for (int i = 0; i < 1000; ++i) { opts.sharpness = i % 101; present(); }
+    CHECK(messages.size() == before_slider);
+    ++dev.swap_extent.width; present();
+    CHECK(messages.size() == before_slider + size_t(enabled));
     for (uint32_t i = 0; i < 300; ++i) { dev.swap_extent.width = 1720 + i; present(); }
     if (enabled) {
         CHECK(messages.size() == 257);

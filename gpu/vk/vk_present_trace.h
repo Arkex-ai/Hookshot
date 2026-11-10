@@ -34,8 +34,11 @@ public:
 
     PresentTraceDecision note(const PresentGeometrySample& sample) {
         const uint32_t kind = sample.kind < last_.size() ? sample.kind : 0;
-        if (seen_[kind] && sample == last_[kind]) return PresentTraceDecision::Quiet;
-        last_[kind] = sample;
+        auto key = sample;
+        // Requests accompany effective changes; slider-only changes must not consume the geometry budget.
+        key.filter = key.sharpness = key.framegen = 0;
+        if (seen_[kind] && key == last_[kind]) return PresentTraceDecision::Quiet;
+        last_[kind] = key;
         seen_[kind] = true;
         if (emitted_ < kLimit) {
             ++emitted_;

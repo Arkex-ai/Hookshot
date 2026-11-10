@@ -17,6 +17,8 @@ does not establish that a feature ran successfully. The route is a CPU command-r
 decision, not a successful GPU present result. Host aspect is observed through the
 callback under presentation serialization; this diagnostic does not alter aspect policy.
 An unavailable/invalid aspect is explicit; invalid values are normalized for stable deduplication.
+Requests accompany geometry/route changes but do not themselves trigger a line, so dragging
+a sharpness slider cannot consume the geometry-change budget while the effective route stays the same.
 
 Repeated unchanged samples are suppressed independently for game, interpolated (`made`)
 and startup/clear frames, so alternating ordinary/interpolated sources does not spam a

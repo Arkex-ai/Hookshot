@@ -28,7 +28,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix="present-geometry-trace-") as temp:
         cpp, exe = Path(temp) / "fixture.cpp", Path(temp) / "fixture.exe"
         cpp.write_text(fixture, encoding="utf-8")
-        subprocess.run([a.cxx, "-std=c++20", "-Wall", "-Wextra", "-Werror", "-I" + str(ROOT / "gpu/vk"),
+        subprocess.run([a.cxx, "-std=c++20", "-Wall", "-Wextra", "-Werror", "-I" + str(a.source / "gpu/vk"),
                         str(cpp), "-o", str(exe)], check=True)
         for value in (None, "0", "1"):
             env = os.environ.copy()
