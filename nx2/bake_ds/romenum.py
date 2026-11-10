@@ -130,7 +130,7 @@ class _PythonZstd:
                             if cap > 1 << 31:
                                 raise ValueError("zstd: frame exceeds output bound")
                     cap = max(1, cap)
-                return decoder.decompress(data, max_output_size=cap)
+                return decoder.decompress(data, max_output_size=cap, allow_extra_data=False)
             except self.zstd.ZstdError as error:
                 last = error
         raise ValueError("zstd: %s" % last)

@@ -37,6 +37,8 @@ class Portability(unittest.TestCase):
         self.assertEqual(reader.decompress(frame, [b"wrong dictionary", dictionary]), payload)
         with self.assertRaises(ValueError):
             reader.decompress(frame[:-1], [dictionary])
+        with self.assertRaises(ValueError):
+            reader.decompress(frame + b"trailing corrupt bytes", [dictionary])
         self.assertEqual(reader.decompress(b"plain container"), b"plain container")
 
     def test_native_fallback_when_python_package_absent(self):
@@ -53,6 +55,8 @@ class Portability(unittest.TestCase):
         self.assertEqual(reader.decompress(frame), payload)
         with self.assertRaises(ValueError):
             reader.decompress(frame[:-1])
+        with self.assertRaises(ValueError):
+            reader.decompress(frame + b"trailing corrupt bytes")
         if sys.platform.startswith("linux"):
             code = """import sys, resource, zstandard
 sys.path.insert(0, sys.argv[1])
