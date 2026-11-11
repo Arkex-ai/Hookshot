@@ -21,7 +21,8 @@ public partial class App : Application
                 Console.Error.WriteLine("error " + why);
             }
             else MessageBox.Show(why, "Hookshot Builder", MessageBoxButton.OK, MessageBoxImage.Error);
-            Shutdown(1);
+            // StartupUri is processed after this handler; a rejected home must never construct MainWindow.
+            Environment.Exit(1);
             return;
         }
         if (e.Args.Length > 0 && e.Args[0] == "--cli")
