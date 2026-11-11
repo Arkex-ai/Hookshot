@@ -24,6 +24,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <wchar.h>
+#include "portable_home.h"
 
 #define WM_STATUS (WM_APP + 1)
 #define WM_DONE (WM_APP + 2)
@@ -34,6 +35,8 @@ static wchar_t g_status[512];
 static volatile LONG g_percent = -1;
 static DWORD g_http_status;   /* (the last answer: 0 when the server was not reached) */
 static wchar_t g_cmdline[2048];
+static HbHome g_home;
+static int g_home_ok;
 /* (RecompLauncher) --cli <make_game.py's options>: no window, the builder's lines on this process's stdout and stderr, its exit code
    as ours; --play <game folder>: the game itself, waited for. Neither is used by the builder's own start, which is unchanged. */
 static int g_headless;
@@ -257,6 +260,51 @@ static void mkdirs(const wchar_t *path) {
     CreateDirectoryW(p, NULL);
 }
 
+/* --portable is an initial setup option, before the app/CLI arguments. Keep the remainder byte-for-byte. */
+static int portable_prefix(wchar_t *command) {
+    const wchar_t *p = command, *end = NULL;
+    while (*p == L' ' || *p == L'\t') p++;
+    if (!wcsncmp(p, L"--portable", 10) && (!p[10] || p[10] == L' ' || p[10] == L'\t')) end = p + 10;
+    else if (!wcsncmp(p, L"\"--portable\"", 12) && (!p[12] || p[12] == L' ' || p[12] == L'\t')) end = p + 12;
+    if (!end) return 0;
+    while (*end == L' ' || *end == L'\t') end++;
+    wmemmove(command, end, wcslen(end) + 1);
+    return 1;
+}
+
+static int init_home(int portable) {
+    wchar_t self[MAX_PATH], requested[MAX_PATH] = L"", standard[MAX_PATH] = L"", profile[MAX_PATH];
+    DWORD n = GetModuleFileNameW(NULL, self, MAX_PATH);
+    if (!n || n >= MAX_PATH || GetEnvironmentVariableW(L"HOOKSHOT_SETUP_BASE", requested, MAX_PATH) >= MAX_PATH) return 0;
+    if (SHGetFolderPathW(NULL, CSIDL_LOCAL_APPDATA, NULL, 0, profile) == S_OK)
+        hb_home_join(standard, MAX_PATH, profile, L"HookshotBuilder");   /* an explicit/portable home needs no AppData */
+    const wchar_t *name = wcsrchr(self, L'\\');
+    name = name ? name + 1 : self;
+    const int game = !_wcsicmp(name, L"hookshot.exe");
+    if (portable) {
+        if (*requested) {
+            if (!hb_home_full(g_home.root, requested)) return 0;
+        } else {
+            wchar_t parent[MAX_PATH];
+            if (!hb_home_full(parent, self) || !hb_home_parent(parent)) return 0;
+            HbHome existing;
+            if (!hb_home_discover(&existing, NULL, self, parent, game)) return 0;
+            if (existing.portable) wcscpy(g_home.root, existing.root);
+            else if (!hb_home_join(g_home.root, MAX_PATH, parent, L"HookshotBuilder")) return 0;
+        }
+        if (hb_home_volume(g_home.root)) return 0;
+        mkdirs(g_home.root);
+        if (!hb_home_mark(g_home.root)) return 0;
+        g_home.portable = 1;
+    } else if (!hb_home_discover(&g_home, requested, self, standard, game)) return 0;
+    wchar_t inherited[3] = L"";
+    if (GetEnvironmentVariableW(L"HOOKSHOT_BUILDER_PORTABLE", inherited, 3) == 1 &&
+        inherited[0] == L'1' && !g_home.portable) return 0;
+    /* Only this setup and the children it starts: no user/system environment or registry change. */
+    return SetEnvironmentVariableW(L"HOOKSHOT_SETUP_BASE", g_home.root) &&
+           SetEnvironmentVariableW(L"HOOKSHOT_BUILDER_PORTABLE", g_home.portable ? L"1" : NULL);
+}
+
 /* a folder and everything in it (a version folder, a half-unpacked one) */
 static void rmtree(const wchar_t *dir) {
     wchar_t pat[MAX_PATH], p[MAX_PATH];
@@ -321,6 +369,45 @@ static int part_folder(const Part *p, wchar_t *rel, int n) {
 /* (players asked for less in %LOCALAPPDATA%: the downloaded zips are not kept beside the unpacked version any more. So that an update
    still downloads only what changed, a part whose checksum the installed version lists in its parts.txt (and whose folder it has)
    is moved over from it instead of downloaded: that version is deleted after the install anyway) */
+/* Portable updates keep the old installation usable until publication; copied parts belong only to staging. */
+static int copy_part_tree(const wchar_t *from, const wchar_t *to) {
+    const DWORD attributes = GetFileAttributesW(from);
+    if (attributes == INVALID_FILE_ATTRIBUTES || (attributes & FILE_ATTRIBUTE_REPARSE_POINT)) return 0;
+    if (!(attributes & FILE_ATTRIBUTE_DIRECTORY)) return CopyFileW(from, to, TRUE) != 0;
+    if (!CreateDirectoryW(to, NULL)) return 0;
+    wchar_t pattern[MAX_PATH];
+    if (!hb_home_join(pattern, MAX_PATH, from, L"*")) return 0;
+    WIN32_FIND_DATAW entry;
+    HANDLE find = FindFirstFileW(pattern, &entry);
+    if (find == INVALID_HANDLE_VALUE) return GetLastError() == ERROR_FILE_NOT_FOUND;
+    int ok = 1;
+    do {
+        if (!wcscmp(entry.cFileName, L".") || !wcscmp(entry.cFileName, L"..")) continue;
+        wchar_t source[MAX_PATH], target[MAX_PATH];
+        if (!hb_home_join(source, MAX_PATH, from, entry.cFileName) ||
+            !hb_home_join(target, MAX_PATH, to, entry.cFileName) || !copy_part_tree(source, target)) { ok = 0; break; }
+    } while (FindNextFileW(find, &entry));
+    if (ok && GetLastError() != ERROR_NO_MORE_FILES) ok = 0;
+    FindClose(find);
+    return ok;
+}
+
+static int publish_install(const wchar_t *staged, const wchar_t *final, int portable) {
+    if (!portable || GetFileAttributesW(final) == INVALID_FILE_ATTRIBUTES) return MoveFileW(staged, final) != 0;
+    wchar_t backup[MAX_PATH];
+    const int n = swprintf(backup, MAX_PATH, L"%ls.rollback-%lu-%llu", final, GetCurrentProcessId(), GetTickCount64());
+    if (n < 0 || n >= MAX_PATH || !MoveFileW(final, backup)) return 0;
+    if (!MoveFileW(staged, final)) {
+        const DWORD error = GetLastError();
+        /* If restoration is prevented externally, the complete old installation remains in .rollback-* for recovery. */
+        MoveFileW(backup, final);
+        SetLastError(error);
+        return 0;
+    }
+    rmtree(backup);
+    return 1;
+}
+
 static int reuse_part(const wchar_t *versions, const char *tag, const Part *p, const wchar_t *install) {
     wchar_t rel[MAX_PATH], cur[MAX_PATH], list[MAX_PATH], from[MAX_PATH], to[MAX_PATH], parent[MAX_PATH];
     char was[128];
@@ -343,7 +430,10 @@ static int reuse_part(const wchar_t *versions, const char *tag, const Part *p, c
     wcscpy(parent, to);
     wchar_t *slash = wcsrchr(parent, L'\\');
     if (slash) *slash = 0, mkdirs(parent);
-    return MoveFileW(from, to) != 0;
+    if (!g_home.portable) return MoveFileW(from, to) != 0;
+    if (copy_part_tree(from, to)) return 1;
+    rmtree(to);   /* only this attempt's derived part destination, never the source */
+    return 0;
 }
 
 /* The checksums of the parts this version holds in folders of their own (reuse_part reads them at the next update) */
@@ -549,12 +639,8 @@ static DWORD WINAPI work(LPVOID unused) {
         Sleep(2000);
     }
     wchar_t base[MAX_PATH], downloads[MAX_PATH];
-    if (SHGetFolderPathW(NULL, CSIDL_LOCAL_APPDATA, NULL, 0, base) != S_OK) fail(L"No local application data folder.");
-    wcscat(base, L"\\HookshotBuilder");
-    {   /* (HOOKSHOT_SETUP_BASE=<folder>: install there instead, for testing installs and updates without touching the real one) */
-        const wchar_t *tb = _wgetenv(L"HOOKSHOT_SETUP_BASE");
-        if (tb && *tb) wcsncpy(base, tb, MAX_PATH - 1), base[MAX_PATH - 1] = 0;
-    }
+    if (!g_home_ok || (g_home.portable && hb_home_marked(g_home.root) != 1)) fail(L"The Builder home is unavailable or its portable marker is invalid.");
+    wcscpy(base, g_home.root);
     swprintf(downloads, MAX_PATH, L"%ls\\downloads", base);
     mkdirs(downloads);
 
@@ -641,7 +727,7 @@ static DWORD WINAPI work(LPVOID unused) {
         /* (unpacked into <tag>.part and renamed once complete: a setup stopped half way never leaves a version that looks installed) */
         swprintf(install, MAX_PATH, L"%ls\\%ls.part", versions, wtag);
         rmtree(install);
-        rmtree(final_dir);
+        if (!g_home.portable) rmtree(final_dir);
         mkdirs(install);
         for (int i = 0; i < nparts; i++) {
             Part *p = &parts[i];
@@ -746,7 +832,8 @@ static DWORD WINAPI work(LPVOID unused) {
         for (wchar_t *q = staged_exe; *q; q++) if (*q == L'/') *q = L'\\';
         if (GetFileAttributesW(staged_exe) == INVALID_FILE_ATTRIBUTES)
             fail(L"The builder is missing after unpacking (%ls). Your antivirus may have removed it: allow the folder %ls and run the setup again.", staged_exe, base);
-        if (!MoveFileW(install, final_dir)) fail(L"Could not finish installing into %ls.", final_dir);
+        if (!publish_install(install, final_dir, g_home.portable))
+            fail(L"Could not finish installing into %ls. A preserved repair backup, if restoration was blocked, is beside it as .rollback-*.", final_dir);
         wcscpy(install, final_dir);
         write_small(marker, tag);
         write_parts(install, parts, nparts);
@@ -804,14 +891,15 @@ static LRESULT CALLBACK wndproc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
    window, download or network of its own. With no builder installed yet, the setup runs as usual and then opens the launcher. */
 static int launch_installed(const wchar_t *args) {
     wchar_t base[MAX_PATH], cur[MAX_PATH], exe[MAX_PATH], dir[MAX_PATH], cmd[4096];
-    if (SHGetFolderPathW(NULL, CSIDL_LOCAL_APPDATA, NULL, 0, base) != S_OK) return 0;
+    if (!g_home_ok) return 0;
+    wcscpy(base, g_home.root);
     char tag[128] = "";
-    swprintf(cur, MAX_PATH, L"%ls\\HookshotBuilder\\versions\\current.txt", base);
+    swprintf(cur, MAX_PATH, L"%ls\\versions\\current.txt", base);
     read_small(cur, tag, sizeof tag);
-    if (!tag[0]) return 0;
+    if (!tag[0] || tag[0] == '.' || !list_name_ok(tag, 0)) return 0;
     wchar_t wtag[128];
     MultiByteToWideChar(CP_UTF8, 0, tag, -1, wtag, 128);
-    swprintf(dir, MAX_PATH, L"%ls\\HookshotBuilder\\versions\\%ls\\HookshotBuilder", base, wtag);
+    swprintf(dir, MAX_PATH, L"%ls\\versions\\%ls\\HookshotBuilder", base, wtag);
     swprintf(exe, MAX_PATH, L"%ls\\HookshotBuilder.exe", dir);
     if (GetFileAttributesW(exe) == INVALID_FILE_ATTRIBUTES) return 0;
     swprintf(cmd, 4096, L"\"%ls\" %ls", exe, args);
@@ -851,12 +939,15 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, LPWSTR cmdline, int show) {
     /* (libraries loaded from here on come from System32 only, never from the folder the setup was downloaded to) */
     SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32);
     wcsncpy(g_cmdline, cmdline ? cmdline : L"", 2047);
+    g_cmdline[2047] = 0;
+    const int portable = portable_prefix(g_cmdline);
     {
         const wchar_t *c = g_cmdline;
         while (*c == L' ') c++;
         if (!wcsncmp(c, L"--play", 6) && (c[6] == L' ' || !c[6])) return play_folder(c + 6);
         if (!wcsncmp(c, L"--cli", 5) && (c[5] == L' ' || !c[5])) g_headless = 1, show = SW_HIDE;
     }
+    g_home_ok = init_home(portable);
     {
         wchar_t self[MAX_PATH];
         GetModuleFileNameW(NULL, self, MAX_PATH);
@@ -882,6 +973,12 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE prev, LPWSTR cmdline, int show) {
             return 1;
         }
         if (wcsstr(g_cmdline, L"--launch") && launch_installed(g_cmdline)) return 0;
+    }
+    if (!g_home_ok) {
+        const wchar_t *why = L"The Builder home is unavailable or its portable marker is invalid. For a new portable install, put this setup in a writable folder and start it with --portable.";
+        if (g_headless) say_error(why);
+        else MessageBoxW(NULL, why, L"Hookshot Builder setup", MB_OK | MB_ICONERROR);
+        return 1;
     }
     INITCOMMONCONTROLSEX icc = {sizeof icc, ICC_PROGRESS_CLASS};
     InitCommonControlsEx(&icc);
