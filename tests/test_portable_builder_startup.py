@@ -1,0 +1,68 @@
+"""Published WPF CLI: execute real startup and Runner with an authored child, never a game or GUI mode."""
+import argparse
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import tempfile
+
+ROOT = Path(__file__).resolve().parents[1]
+RUN_ALL_ARGS = ["--dotnet", "{dotnet}"]
+RUN_ALL_SKIP = {"linux": "Windows Desktop WPF application startup"}
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--dotnet", default="dotnet")
+    args = parser.parse_args()
+    with tempfile.TemporaryDirectory(prefix="portable-wpf-cli-") as folder:
+        root = Path(folder)
+        project = root / "project"
+        shutil.copytree(ROOT / "builder/HookshotBuilder", project, ignore=shutil.ignore_patterns("bin", "obj"))
+        home = root / "Original ü, volume/HookshotBuilder"
+        app = home / "versions/v-authored/HookshotBuilder"
+        published = root / "published"
+        subprocess.run([args.dotnet, "publish", str(project / "HookshotBuilder.csproj"), "--configuration", "Debug",
+                        "-p:NuGetAudit=false", "--output", str(published), "--disable-build-servers", "-v", "quiet"], check=True)
+        shutil.copytree(published, app)
+        marker = home / ".hookshot-portable"
+        marker.write_text("Hookshot Builder portable home v1\n", encoding="utf-8")
+        script = app / "tools/nx2/make_game.py"
+        script.parent.mkdir(parents=True)
+        script.write_text('import os,json\nprint(json.dumps({"home":os.environ.get("HOOKSHOT_SETUP_BASE"),"portable":os.environ.get("HOOKSHOT_BUILDER_PORTABLE")}))\n', encoding="utf-8")
+        env = {k: v for k, v in os.environ.items() if k.upper() not in ("HOOKSHOT_SETUP_BASE", "HOOKSHOT_BUILDER_PORTABLE")}
+        # The authored tools fixture uses the trusted interpreter running this check, not another PATH entry.
+        env["PATH"] = str(Path(os.sys.executable).parent) + os.pathsep + env.get("PATH", "")
+        def run(overrides, valid):
+            result = subprocess.run([str(app / "HookshotBuilder.exe"), "--cli", "--authored-probe"],
+                                    env=dict(env, **overrides), cwd=root, capture_output=True, text=True,
+                                    encoding="utf-8", errors="replace", timeout=30,
+                                    creationflags=subprocess.CREATE_NO_WINDOW)
+            if valid:
+                assert result.returncode == 0, result.stdout + result.stderr
+                child = json.loads(next(x for x in result.stdout.splitlines() if x.startswith("{")))
+                assert Path(child["home"]) == home and child["portable"] == "1", child
+            else:
+                assert result.returncode == 1, result.stdout + result.stderr
+                assert "error The Builder home could not be opened." in result.stdout
+                assert "Unhandled exception" not in result.stderr
+                assert not any(x.startswith("{") for x in result.stdout.splitlines())
+        run({"HOOKSHOT_SETUP_BASE": str(home), "HOOKSHOT_BUILDER_PORTABLE": "1"}, True)
+        run({}, True)
+        moved = root / "Relocated ü, volume"
+        home.parent.rename(moved)
+        app = moved / app.relative_to(home.parent)
+        home = moved / "HookshotBuilder"
+        marker = home / ".hookshot-portable"
+        run({}, True)
+        run({"HOOKSHOT_SETUP_BASE": "relative", "HOOKSHOT_BUILDER_PORTABLE": "1"}, False)
+        marker.write_text("broken")
+        run({}, False)
+        marker.unlink()
+        run({"HOOKSHOT_SETUP_BASE": str(home), "HOOKSHOT_BUILDER_PORTABLE": "1"}, False)
+        print("Published WPF startup: six no-window CLI/child/relocation/error scenarios passed")
+
+
+if __name__ == "__main__":
+    main()
