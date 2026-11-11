@@ -9,7 +9,7 @@ import subprocess
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
-RUN_ALL_ARGS = ["--cc", "{cc}"]
+RUN_ALL_ARGS = ["--cc", "gcc"]
 RUN_ALL_SKIP = {"windows": "Linux memfd/sysfs startup policy"}
 
 CASES = [
