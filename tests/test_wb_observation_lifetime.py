@@ -14,7 +14,9 @@ PRELUDE = r'''
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <cstdio>
 #include <vector>
+#include "hookshot_env.h"
 using VkBuffer = uintptr_t;
 using VmaAllocation = void*;
 using VkDeviceAddress = uint64_t;
@@ -43,7 +45,11 @@ uint64_t vkGetBufferDeviceAddress(int, const VkBufferDeviceAddressInfo* p) { ret
 '''
 
 CASES = r'''
-int main() {
+int main(int argc, char** argv) {
+    if (argc != 2 || wbd_observe_on() != (std::strcmp(argv[1], "1") == 0)) {
+        std::fputs("observation switch disagrees with requested mode\n", stderr);
+        return 2;
+    }
     // Failed staged resources are released, including successful allocation without mapping/BDA.
     WbdTable staged;
     assert(!wbd_table_make(0,staged));
@@ -148,7 +154,7 @@ def main():
     parser.add_argument("--cxx", default="g++")
     parser.add_argument("--mutations", action="store_true", help="Require causal retirement/visibility regressions to fail")
     args = parser.parse_args()
-    flags = ["-std=c++17", "-O2", "-Wall", "-Wextra", "-Werror"]
+    flags = ["-std=c++17", "-O2", "-Wall", "-Wextra", "-Werror", "-I", str(ROOT / "gpu/vk/compat")]
     if os.name == "nt":
         flags.append("-D_CRT_SECURE_NO_WARNINGS")  # MSVC's CRT deprecates the standard getenv used by the extracted helper.
     source = (ROOT / "gpu/vk/vk_memory.cpp").read_text(encoding="utf-8")
@@ -157,22 +163,28 @@ def main():
         cpp, exe = Path(tmp) / "test.cpp", Path(tmp) / "test.exe"
         cpp.write_text(PRELUDE + actual + CASES, encoding="utf-8")
         subprocess.run([args.cxx, *flags, str(cpp), "-o", str(exe)], check=True, timeout=60)
-        for mode in ("0", "1"):
-            env = dict(os.environ, RX_VK_WB_OBSERVE=mode)
-            subprocess.run([str(exe)], env=env, check=True, timeout=15)
-            print("PASS: production observation lifetime, opt-in=" + mode)
+        for mode, enabled in ((None, False), ("", False), ("0", False), ("false", False), (" Off ", False),
+                              ("no", False), ("1", True), ("on", True), ("TRUE", True), ("yes", True)):
+            env = dict(os.environ)
+            env.pop("RX_VK_WB_OBSERVE", None)
+            if mode is not None:
+                env["RX_VK_WB_OBSERVE"] = mode
+            subprocess.run([str(exe), "1" if enabled else "0"], env=env, check=True, timeout=15)
+            print("PASS: production observation lifetime, opt-in=" + repr(mode))
         if args.mutations:
             controls = (
                 ("pending completion ignored", "if (!t.observed_count || t.value > mem_completed) return;", "if (!t.observed_count) return;"),
                 ("result consumed repeatedly", "t.observed_count = 0; // Consume once", "/* lost one-shot reset */ // Consume once"),
                 ("missing GPU flag treated as valid", "flags[i] > 1 ||", "false ||"),
                 ("invalidation error ignored", "!invalidate_mapped_checked(t.alloc, offset + count * sizeof(uint32_t))", "false"),
+                ("shared switch parser bypassed", 'static const bool on = env_on("RX_VK_WB_OBSERVE");',
+                 'static const bool on = [] { const char* s = getenv("RX_VK_WB_OBSERVE"); return s && atoi(s) != 0; }();'),
             )
             for label, before, after in controls:
                 assert actual.count(before) == 1, label
                 cpp.write_text(PRELUDE + actual.replace(before,after) + CASES, encoding="utf-8")
                 subprocess.run([args.cxx, *flags, str(cpp), "-o", str(exe)], check=True, timeout=60)
-                result = subprocess.run([str(exe)], env=dict(os.environ,RX_VK_WB_OBSERVE="1"),
+                result = subprocess.run([str(exe), "1"], env=dict(os.environ,RX_VK_WB_OBSERVE="on"),
                                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)
                 assert result.returncode != 0, "Undetected mutation: " + label
                 print("PASS: causal mutation rejected: " + label)

@@ -3425,7 +3425,7 @@ struct WbdChunk {   // (shaders/wb_diff.comp's Chunk)
     uint32_t count, vecs;   // (16-byte vectors when vecs is 1, else words)
 };
 bool wbd_observe_on() {
-    static const bool on = [] { const char* s = getenv("RX_VK_WB_OBSERVE"); return s && atoi(s) != 0; }();
+    static const bool on = env_on("RX_VK_WB_OBSERVE");
     return on;
 }
 constexpr uint64_t kWbdObserveChunks = 256u << 10; // At most 1 MiB of optional flags per table.
