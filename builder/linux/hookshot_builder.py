@@ -866,6 +866,9 @@ class Builder(tk.Tk):
         elif self.mode == "update-game":
             self.status.set("Hookshot %s is available. Your game is %s. Update downloads only what changed, then compiles what changed."
                             % (target, game))
+        elif self.mode == "up-to-date" and linux_update.older_version(target, game):
+            self.status.set("Your game is %s, newer than this builder's update target %s. Play keeps this version; "
+                            "choose another update track to change versions." % (game, target))
         elif self.mode == "up-to-date" and self.latest is None:
             self.status.set("Your game is %s, as this builder. GitHub did not answer, so newer versions could not be checked." % game)
         elif self.mode == "up-to-date":
@@ -881,7 +884,9 @@ class Builder(tk.Tk):
         game, kept = linux_update.game_version(self.launch_folder)
         target = linux_update.update_target(self.latest, self.tools, self.switching())
         show = False
-        if target and game and game != target and kept:
+        if not self.switching() and linux_update.older_version(target, game):
+            self.launch_status.set("Your game is %s, newer than this builder's update target %s. Play keeps this version." % (game, target))
+        elif target and game and game != target and kept:
             self.launch_status.set("Update available: %s" % target)
             show = True
         elif target and game and game != target:
@@ -938,20 +943,22 @@ class Builder(tk.Tk):
         self.lookup_latest()
 
     def older_ok(self, target, have):
-        """(going to an older version, from another track: asked first)"""
-        old, new = linux_update.release_key(have), linux_update.release_key(target)
-        if not (self.switching() and old and new and new < old):
+        """Ask before any known downgrade, including a rebuild after changing DLSS on the same track."""
+        if not linux_update.older_version(target, have):
             return True
         return messagebox.askyesno("Hookshot", "%s is older than %s, the version you have now. Install %s?" % (target, have, target))
 
     def begin_update(self, folder=None):
+        folder = self.update_folder if folder is None else folder
+        target = self.update_tag or linux_update.update_target(self.latest, self.tools, self.switching())
+        if folder and not self.older_ok(target, linux_update.game_version(folder)[0]):
+            return   # (before changing pages or starting any download/build, including the launcher button)
         if folder is not None:
             self.update_folder = folder
         self.show_progress("Updating your game" if self.update_folder else "Updating Hookshot Builder")
         folder = self.update_folder
         # (a game older than this builder is built again with it: nothing to download, and GitHub need not answer. So is one
         # from a builder that is not an older release, e.g. from the Actions tab: issue 902)
-        target = self.update_tag or linux_update.update_target(self.latest, self.tools, self.switching())
         fetched = self.fetched or bool(folder and self.tools and target == self.tools)
 
         def run():
@@ -1008,10 +1015,8 @@ class Builder(tk.Tk):
             if game_ready(folder):
                 self.play_and_close(folder)
             return
-        if mode in ("update-game", "update-builder"):
-            game, _kept = linux_update.game_version(os.path.expanduser(self.out.get().strip()))
-            if not self.older_ok(linux_update.update_target(self.latest, self.tools, self.switching()),
-                                 game if mode == "update-game" and game else self.tools):
+        if mode == "update-builder":
+            if not self.older_ok(linux_update.update_target(self.latest, self.tools, self.switching()), self.tools):
                 return
         if mode == "update-game":
             self.fetched = False
