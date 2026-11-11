@@ -77,7 +77,7 @@ class Heads(unittest.TestCase):
             # (the damaged file now holds its stand-in: a whole one of the same kind)
             self.assertEqual(Path(romfs, "Model", "damaged.bntx.zs").read_bytes(), WHOLE)
             self.assertFalse(os.path.exists(os.path.join(out, make_game.HEADS)))
-            self.assertEqual(Path(out, ".hookshot_romfs_checked").read_text(), stamp + "\n")
+            self.assertEqual(Path(out, ".hookshot_romfs_checked").read_text(), "resolved-v1\n" + stamp + "\n")
             # (#2237: the list is kept in the game folder, where the build's output is not)
             note = Path(out, make_game.DAMAGED_NOTE)
             listed = note.read_text(encoding="utf-8")
