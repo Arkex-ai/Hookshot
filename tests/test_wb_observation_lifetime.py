@@ -17,6 +17,11 @@ PRELUDE = r'''
 #include <cstdio>
 #include <vector>
 #include "hookshot_env.h"
+// A rejected causal control must exit, not wait for an interactive CRT dialog.
+#undef assert
+#define assert(condition) do { if (!(condition)) { \
+    std::fprintf(stderr, "assertion failed: %s\n", #condition); std::exit(1); \
+} } while (0)
 using VkBuffer = uintptr_t;
 using VmaAllocation = void*;
 using VkDeviceAddress = uint64_t;
