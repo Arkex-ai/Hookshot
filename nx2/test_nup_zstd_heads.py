@@ -118,6 +118,19 @@ class Heads(unittest.TestCase):
             Path(path).write_bytes(b"unpacked by this builder: authored \x81.nup 22\n")
             self.assertEqual(make_game.read_stamp(path), "")
 
+    def test_resolved_check_keeps_unicode_unpack_stamp_and_skips_only_after_success(self):
+        with tempfile.TemporaryDirectory() as out, mock.patch("locale.getencoding", return_value="cp1252"):
+            romfs = Path(out, "romfs")
+            romfs.mkdir()
+            stamp = "unpacked by this builder: authored\u2122\u205a.nup 123\n"
+            make_game.write_stamp(Path(out, ".hookshot_romfs"), stamp)
+            checked = Path(out, ".hookshot_romfs_checked")
+            with mock.patch.object(nup, "stand_in_damaged", return_value=[]) as scan:
+                make_game.stand_in_damaged_files(out, str(romfs))
+                make_game.stand_in_damaged_files(out, str(romfs))
+            self.assertEqual(scan.call_count, 1)
+            self.assertEqual(checked.read_bytes(), ("resolved-v1\n" + stamp).encode("utf-8"))
+
     def test_a_stamp_that_cannot_be_read_matches_no_name(self):
         """A letter replaced while decoding made two names equal, and the second .nup's unpack was skipped (Python's UTF-8
         mode, where the preferred encoding is UTF-8 again)"""
