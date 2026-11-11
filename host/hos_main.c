@@ -183,6 +183,11 @@ static int reserve_guest(void) {
                 if (f) {
                     if (fscanf(f, "%llu", &limit_mb) != 1) limit_mb = 0;
                     fclose(f);
+                } else {
+                    /* A sandbox can expose the device without /sys/module. Match the renderer's conservative fallback;
+                       a readable zero or malformed value must still keep automatic memfd selection off. */
+                    limit_mb = 64;
+                    if (!e) hos_log("mem: udmabuf's size limit is unavailable: trying the conservative 64 MB fallback");
                 }
                 usable = limit_mb > 0;
             }
