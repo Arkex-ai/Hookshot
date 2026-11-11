@@ -20,6 +20,10 @@ Choosing another update track can still select an older version. Before that reb
 for confirmation. The same confirmation protects other rebuild entry points, including changing NVIDIA DLSS
 while using older tools. Declining starts no download or build and leaves the page in place.
 
+The downloaded release list must also name the selected target before installation or reuse of the running
+tools. If GitHub's API and download list disagree during a release, the update stops with a retry message instead
+of rebuilding with a different version.
+
 Ordering follows the existing `release_key` contract: numeric release versions, release candidates before their
 release, and git-describe builds after their tag. Arbitrary hashes and two different nightlies are not commit
 ancestry evidence; their existing update policy is unchanged. The new launcher's explicit release selector is

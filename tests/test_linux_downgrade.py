@@ -38,7 +38,7 @@ class Widget:
         self.visible = False
 
 
-def handlers(answer):
+def handlers(answer, run_worker=False):
     """Compile complete production handlers; only UI/thread/filesystem observations are authored boundaries."""
     tree = ast.parse((ROOT / "builder/linux/hookshot_builder.py").read_text(encoding="utf-8"))
     builder = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "Builder")
@@ -47,7 +47,13 @@ def handlers(answer):
     assert len(methods) == len(names)
     events = []
     popup = types.SimpleNamespace(askyesno=lambda *a: events.append("confirm") or answer)
-    worker = types.SimpleNamespace(Thread=lambda **kw: types.SimpleNamespace(start=lambda: events.append("worker")))
+    def thread(**kw):
+        def start():
+            events.append("worker")
+            if run_worker:
+                kw["target"]()
+        return types.SimpleNamespace(start=start)
+    worker = types.SimpleNamespace(Thread=thread)
     namespace = dict(os=os, linux_update=linux_update, messagebox=popup, threading=worker,
                      tk=types.SimpleNamespace(TclError=RuntimeError), folder_has_dlss=lambda _: False)
     exec(compile(ast.Module(body=methods, type_ignores=[]), "production-builder-handlers", "exec"), namespace)
@@ -57,6 +63,7 @@ def handlers(answer):
                                 status=Value(), launch_status=Value(), launch_update=Widget(), px=lambda n: n,
                                 dlss=Value(True), dlss_toggled=False,
                                 show_progress=lambda _: events.append("progress"))
+    app.lines = types.SimpleNamespace(put=lambda row: events.append(row))
     for name in names:
         setattr(app, name, types.MethodType(namespace[name], app))
     return app, events
@@ -129,6 +136,43 @@ class Admission(unittest.TestCase):
             self.assertEqual(app.mode, "update-game")
             app.build()
         self.assertEqual(events, ["confirm", "progress", "worker"])
+
+    def test_download_list_cannot_replace_the_target_even_with_the_running_tools(self):
+        for offered in ("v2.1.0", "v2.0.14", "v2.4.0"):
+            with self.subTest(offered=offered):
+                app, events = handlers(False, run_worker=True)
+                app.latest, app.fetched = "v2.3.0", False
+                with mock.patch.object(linux_update, "game_version", return_value=("v2.2.0", True)), \
+                     mock.patch.object(linux_update, "running_root", return_value="authored-appdir"), \
+                     mock.patch.object(linux_update, "startup_manifest", return_value=types.SimpleNamespace(tag=offered)), \
+                     mock.patch.object(linux_update, "tools_tag", return_value="v2.1.0"), \
+                     mock.patch.object(linux_update, "install", side_effect=AssertionError("must not install")) as install:
+                    app.begin_update("authored-game")
+                install.assert_not_called()
+                self.assertEqual(events[:2], ["progress", "worker"])
+                self.assertEqual(events[2][0], "update-error")
+                self.assertIn("GitHub offered %s, not v2.3.0" % offered, events[2][1])
+                self.assertFalse(any(isinstance(row, tuple) and row[0] == "do-build" for row in events))
+
+    def test_matching_target_can_rebuild_or_handoff_to_exact_downloaded_version(self):
+        app, events = handlers(False, run_worker=True)
+        with mock.patch.object(linux_update, "game_version", return_value=("v2.0.14", True)):
+            app.begin_update("authored-game")
+        self.assertEqual(events, ["progress", "worker", ("do-build", "authored-game")])
+        class Handoff(BaseException):
+            pass
+        app, events = handlers(False, run_worker=True)
+        app.latest, app.fetched = "v2.3.0", False
+        with mock.patch.object(linux_update, "game_version", return_value=("v2.2.0", True)), \
+             mock.patch.object(linux_update, "running_root", return_value="authored-appdir"), \
+             mock.patch.object(linux_update, "startup_manifest", return_value=types.SimpleNamespace(tag="v2.3.0")), \
+             mock.patch.object(linux_update, "tools_tag", return_value="v2.1.0"), \
+             mock.patch.object(linux_update, "read_manifest", return_value=None), \
+             mock.patch.object(linux_update, "install", return_value="authored-apprun"), \
+             mock.patch.dict(os.environ), mock.patch.object(os, "execv", side_effect=Handoff) as handoff:
+            with self.assertRaises(Handoff):
+                app.begin_update("authored-game")
+            handoff.assert_called_once_with("authored-apprun", ["authored-apprun", "--update", "authored-game", "--tag", "v2.3.0", "--fetched"])
 
 
 @unittest.skipUnless(sys.platform.startswith("linux"), "actual POSIX folder launcher")

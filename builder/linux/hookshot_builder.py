@@ -970,12 +970,12 @@ class Builder(tk.Tk):
                     # (another track's build, or a Track switch: that version's own list)
                     named = target if target and (self.switching() or linux_update.track_of(target) != "release") else None
                     manifest = linux_update.startup_manifest(root, tag=named)
+                    # The API and its download list can disagree right after a release. Check even when the list
+                    # names the running tools: otherwise a newer target silently rebuilds with those older tools.
+                    if target and manifest.tag != target:
+                        raise RuntimeError("GitHub offered %s, not %s: its download links can lag right after a release. "
+                                           "Try Update again in a few minutes." % (manifest.tag, target))
                     if manifest.tag != linux_update.tools_tag(root):
-                        # (as Windows does: GitHub's latest list lags right after a publish, and installing it would put
-                        # the release before the one asked for over these tools)
-                        if self.update_tag and manifest.tag != self.update_tag:
-                            raise RuntimeError("GitHub offered %s, not %s: its download links can lag right after a release. "
-                                               "Try Update again in a few minutes." % (manifest.tag, self.update_tag))
                         source =linux_update.read_manifest(root)
                         apprun = linux_update.install(manifest, root, source, note=lambda message: self.lines.put(("note", message)))
                         for name in ("APPDIR", "APPIMAGE", "ARGV0", "OWD", "LD_LIBRARY_PATH"):
