@@ -148,12 +148,15 @@ def main():
     parser.add_argument("--cxx", default="g++")
     parser.add_argument("--mutations", action="store_true", help="Require causal retirement/visibility regressions to fail")
     args = parser.parse_args()
+    flags = ["-std=c++17", "-O2", "-Wall", "-Wextra", "-Werror"]
+    if os.name == "nt":
+        flags.append("-D_CRT_SECURE_NO_WARNINGS")  # MSVC's CRT deprecates the standard getenv used by the extracted helper.
     source = (ROOT / "gpu/vk/vk_memory.cpp").read_text(encoding="utf-8")
     actual = source[source.index("struct WbdChunk {"):source.index("void memory_end_submission(")]
     with tempfile.TemporaryDirectory(prefix="wb-lifetime-") as tmp:
         cpp, exe = Path(tmp) / "test.cpp", Path(tmp) / "test.exe"
         cpp.write_text(PRELUDE + actual + CASES, encoding="utf-8")
-        subprocess.run([args.cxx, "-std=c++17", "-O2", "-Wall", "-Wextra", "-Werror", str(cpp), "-o", str(exe)], check=True, timeout=60)
+        subprocess.run([args.cxx, *flags, str(cpp), "-o", str(exe)], check=True, timeout=60)
         for mode in ("0", "1"):
             env = dict(os.environ, RX_VK_WB_OBSERVE=mode)
             subprocess.run([str(exe)], env=env, check=True, timeout=15)
@@ -168,7 +171,7 @@ def main():
             for label, before, after in controls:
                 assert actual.count(before) == 1, label
                 cpp.write_text(PRELUDE + actual.replace(before,after) + CASES, encoding="utf-8")
-                subprocess.run([args.cxx, "-std=c++17", "-O2", "-Wall", "-Wextra", "-Werror", str(cpp), "-o", str(exe)], check=True, timeout=60)
+                subprocess.run([args.cxx, *flags, str(cpp), "-o", str(exe)], check=True, timeout=60)
                 result = subprocess.run([str(exe)], env=dict(os.environ,RX_VK_WB_OBSERVE="1"),
                                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)
                 assert result.returncode != 0, "Undetected mutation: " + label
