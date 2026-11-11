@@ -99,6 +99,7 @@ static void WaitForSingleObject(HANDLE h, unsigned timeout) {
     ++waited;
 }
 static void load_hookshot_env() {}
+static void driver_cache_room() {} // Cache environment behavior is covered by test_driver_cache_room.py.
 
 #include "display_startup_actual.inc"
 
