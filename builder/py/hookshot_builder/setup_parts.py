@@ -14,6 +14,7 @@ import re
 import shutil
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import zipfile
 
@@ -143,18 +144,58 @@ def read_manifest(status, tag=None, cancel=None):
             raise SetupError("GitHub's download servers are failing right now (an error 500 or above, tried 8 times over 3 minutes). "
                              "This is on GitHub's side: try again in a few minutes, or later today.")
         raise SetupError("Could not reach GitHub to get the Hookshot Builder (%s). Check your internet connection and try again." % last)
-    got_tag, parts = "", []
-    for line in text.splitlines():
-        p = line.split()
-        if len(p) >= 2 and p[0] == "tag":
-            got_tag = p[1]
-        elif len(p) == 7 and p[0] == "part":
-            parts.append(Part(*p[1:]))
-    if not got_tag or not parts:
-        raise SetupError("The release's setup list could not be read. Try again later.")
+    got_tag, parts = parse_manifest(text)
     if tag and tag != got_tag:
         raise SetupError("GitHub answered with the setup list of %s, not %s (its download links can lag right after a release). "
                          "Try the update again in a few minutes." % (got_tag, tag))
+    return got_tag, parts
+
+
+def valid_component(name):
+    """A single portable file or folder name from a setup list."""
+    return (
+        re.fullmatch(r"[A-Za-z0-9._+-]+", name) is not None
+        and not name.endswith(".")
+        and re.fullmatch(r"CON|PRN|AUX|NUL|(?:COM|LPT)[1-9]", name.split(".", 1)[0], re.IGNORECASE) is None
+    )
+
+
+def parse_manifest(text):
+    """Read and validate all fields used by the installer before touching the installation."""
+    got_tag, parts = "", []
+    invalid = "The release's setup list has an invalid entry. Try again later."
+    for line in text.splitlines():
+        fields = line.split()
+        if not fields:
+            continue
+        if fields[0] == "tag":
+            if got_tag or len(fields) != 2 or not valid_component(fields[1]):
+                raise SetupError(invalid)
+            got_tag = fields[1]
+        elif fields[0] == "part":
+            if len(fields) != 7:
+                raise SetupError(invalid)
+            _, sha, size, dest, frm, to, url = fields
+            dest = dest.replace("\\", "/")
+            try:
+                link = urllib.parse.urlsplit(url)
+                https = url.startswith("https://") and link.hostname and link.username is None
+            except ValueError:
+                https = False
+            if (
+                re.fullmatch(r"[0-9a-f]{64}", sha) is None
+                or re.fullmatch(r"[0-9]{1,20}", size) is None
+                or not 0 < int(size) < 1 << 64
+                or (dest != "." and not all(valid_component(name) for name in dest.split("/")))
+                or not valid_component(frm)
+                or not valid_component(to)
+                or (frm == "-") != (to == "-")
+                or not https
+            ):
+                raise SetupError(invalid)
+            parts.append(Part(sha, size, dest, frm, to, url))
+    if not got_tag or not parts:
+        raise SetupError("The release's setup list could not be read. Try again later.")
     return got_tag, parts
 
 
@@ -174,9 +215,9 @@ def reuse_part(tag, p, install):
     downloaded: that version is deleted after the install anyway"""
     rel = part_folder(p)
     was = paths.read_small(os.path.join(paths.versions(), "current.txt"))
-    if not rel or not was or was == tag:
+    if not rel or not valid_component(was) or was == tag:
         return False
-    if p.sha not in paths.read_small(os.path.join(paths.versions(), was, "parts.txt")):
+    if p.sha not in paths.read_small(os.path.join(paths.versions(), was, "parts.txt")).splitlines():
         return False
     src, dst = os.path.join(paths.versions(), was, rel), os.path.join(install, rel)
     if not os.path.exists(src):
@@ -194,6 +235,8 @@ def rmtree(p):
 
 
 def installed(tag):
+    if not valid_component(tag):
+        return None
     d = os.path.join(paths.versions(), tag)
     return d if os.path.isfile(os.path.join(d, "installed.txt")) and os.path.isfile(
         os.path.join(d, "HookshotBuilder", "tools", "nx2", "make_game.py")) else None
