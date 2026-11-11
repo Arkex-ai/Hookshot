@@ -22,7 +22,7 @@ static inline int hos_output_is_surround(uint32_t w, uint32_t h) {
 static inline double hos_wide_clamp(double want) {
     const double surround = 48.0 / 9.0;
     /* Accept the rounded value commonly used for HOS_ASPECT. */
-    return want >= surround - 0.000001 ? surround : want < 5.0 / 4.0 ? 5.0 / 4.0 : want;
+    return want >= surround - 0.0001 ? surround : want < 5.0 / 4.0 ? 5.0 / 4.0 : want;
 }
 
 /* The most pixels a widescreen picture takes: 3840 x 2160's. The game's render targets come from a pool sized for its picture

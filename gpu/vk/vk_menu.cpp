@@ -320,8 +320,9 @@ int step_output_choice(int id, int dir) {
     const int at = (int)(std::find(order, order + n, output_choice(id)) - order);
     return order[std::clamp(at + dir, 0, n - 1)];
 }
-/// The picture an Output resolution choice makes: with Ultrawide on, at the screen's
-/// shape and at most hos_wide_max_px() pixels, as host/hos_main.c works it out at the start (host/hos_wide_size.h); else the
+/// The picture an Output resolution choice makes: a custom surround output takes its own shape;
+/// otherwise Ultrawide uses the screen's shape. Both keep at most hos_wide_max_px() pixels, matching
+/// host/hos_main.c at startup (host/hos_wide_size.h); otherwise the
 /// 16:9 output. The game's own choice (0) as it is (its size comes from the game's graphics scale). *native: the screen's own size
 Out picture_for(int v, bool* native = nullptr) {
     v = output_choice(v);

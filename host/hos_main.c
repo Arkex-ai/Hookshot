@@ -1488,7 +1488,8 @@ static int game_main(int argc, char **argv) {
     hos_mem_init(hos_image_end);
     {   /* (hookshot) Widescreen and ultrawide (nx2/oot_wide.py): HOS_ASPECT=<ratio> (2.3889 for 3440x1440), else the Insert menu's
            Ultrawide (off unless it says 1) takes the main monitor's shape. The game's picture takes that shape at its own height (the
-           world wider at the sides on an ultrawide screen, narrower on a 16:10 or 4:3 one), its 16:9 cameras the picture's ratio. Wider
+           world wider at the sides on an ultrawide screen, narrower on a 16:10 or 4:3 one), its 16:9 cameras the picture's ratio.
+           A custom output wider than 32:9 takes precedence over both HOS_ASPECT and Ultrawide, matching the menu's picture. Wider
            than 16:9 the HUD, menus and movies keep the middle 16:9; narrower they fill the picture's width. Until now the one 16:9
            constant in the game's data was changed and the 16:9 picture stretched to the window. */
         const char *e = getenv("HOS_ASPECT");
