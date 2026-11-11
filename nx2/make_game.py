@@ -1468,9 +1468,11 @@ def portable_game_home(out):
 
 def write_game_home(out, relative):
     """Only called after successful output finalization; never resolves relative to the process cwd."""
-    if relative is None:
-        return
     destination = os.path.join(out, ".hookshot_builder_home")
+    if relative is None:
+        with contextlib.suppress(FileNotFoundError):
+            os.remove(destination)
+        return
     fd, partial = tempfile.mkstemp(prefix=".hookshot-home-", dir=out)
     try:
         with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:

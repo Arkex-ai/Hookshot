@@ -1,5 +1,6 @@
 """Exercise the production game association without game files, a build or a child process."""
 import ast
+import contextlib
 import ntpath
 import os
 from pathlib import Path
@@ -31,7 +32,7 @@ class Association(unittest.TestCase):
             marker.write_bytes(b"Hookshot Builder portable home v1\n")
             setup = tools.parent / "HookshotBuilder-Setup.exe"
             setup.write_text("authored fixture; never executable")
-            namespace = dict(os=os, ntpath=ntpath, tempfile=tempfile, ROOT=str(tools))
+            namespace = dict(os=os, ntpath=ntpath, tempfile=tempfile, contextlib=contextlib, ROOT=str(tools))
             exec(compile(ast.Module(body=nodes, type_ignores=[]), "make_game.py", "exec"), namespace)
             resolve, write = namespace["portable_game_home"], namespace["write_game_home"]
             main_body = next(n for n in source.body if isinstance(n, ast.FunctionDef) and n.name == "main").body
@@ -75,8 +76,30 @@ class Association(unittest.TestCase):
                 self.assertEqual(resolve(str(moved / "Game")), relative)
                 os.environ["HOOKSHOT_BUILDER_PORTABLE"] = "0"
                 self.assertIsNone(resolve(str(moved / "Game")))
-                write(str(moved / "Game"), None)
-                self.assertEqual((moved / "Game/.hookshot_builder_home").read_bytes(), original)
+                # A successful standard rebuild must replace the portable association,
+                # not leave setup and the game's updater choosing different Builders.
+                standard = str(root / "standard/HookshotBuilder.exe")
+                namespace.update(out=str(moved / "Game"),
+                                 a=SimpleNamespace(check=False, update=None, out=str(moved / "Game")))
+                statements = ast.Module(body=[early, version_loop, publish], type_ignores=[])
+                with patch.dict(os.environ, {"HOOKSHOT_BUILDER_EXE": standard}):
+                    exec(compile(statements, "make_game.py", "exec"), namespace)
+                    self.assertEqual((moved / "Game/hookshot_version.txt").read_text(),
+                                     "version=v-authored\nbuilder=%s\n" % standard)
+                    self.assertFalse((moved / "Game/.hookshot_builder_home").exists())
+                    # A second standard rebuild has no association to remove.
+                    exec(compile(statements, "make_game.py", "exec"), namespace)
+                # Failure to remove an association must not publish standard metadata
+                # while the native setup would still follow the old portable pointer.
+                pointer = moved / "Game/.hookshot_builder_home"
+                pointer.write_bytes(original)
+                version = moved / "Game/hookshot_version.txt"
+                version.write_text("version=old\nbuilder_local=1\n")
+                with patch.object(namespace["os"], "remove", side_effect=PermissionError("authored denial")):
+                    with self.assertRaises(PermissionError):
+                        exec(compile(statements, "make_game.py", "exec"), namespace)
+                self.assertEqual(version.read_text(), "version=old\nbuilder_local=1\n")
+                self.assertEqual(pointer.read_bytes(), original)
 
 
 if __name__ == "__main__":

@@ -36,6 +36,11 @@ old directory remains beside it as `<version>.rollback-*`; close programs using 
 Portable mode requires the packaged setup launcher; a source checkout without that launcher cannot produce a
 relocatable portable game's update association. Existing standard game folders keep their previous update behavior;
 building one again with the portable Builder establishes the new association.
+Rebuilding or updating a portable game with the standard Builder removes that association after successful output
+finalization, so both the game launcher and update offer use the standard Builder again.
+
+For an incomplete installed version, use **Repair** through the packaged setup launcher, keeping the portable home
+in place. The older ZIP fallback reuses a matching installed version; it does not audit or repair all of its files.
 
 For scripted child processes the setup supplies an absolute `HOOKSHOT_SETUP_BASE` and
 `HOOKSHOT_BUILDER_PORTABLE=1` to that process tree only. A portable root must have the valid marker, be a dedicated
