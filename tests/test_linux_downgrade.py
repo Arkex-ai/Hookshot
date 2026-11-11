@@ -174,6 +174,61 @@ class Admission(unittest.TestCase):
                 app.begin_update("authored-game")
             handoff.assert_called_once_with("authored-apprun", ["authored-apprun", "--update", "authored-game", "--tag", "v2.3.0", "--fetched"])
 
+    def test_fetched_tag_alone_does_not_bypass_consent_but_matching_consent_is_one_use(self):
+        for token, version, expected in [(None, "v2.2.0", ["confirm"]),
+                                         ("v2.2.0", "v2.2.0", ["progress", "worker"]),
+                                         ("v2.2.0", "v2.3.0", ["confirm"])]:
+            with self.subTest(token=token, version=version):
+                app, events = handlers(False)
+                app.update_tag, app.allow_downgrade_from = app.tools, token
+                with mock.patch.object(linux_update, "game_version", return_value=(version, True)):
+                    app.begin_update("authored-game")
+                    self.assertEqual(events, expected)
+                    if token == version:
+                        self.assertIsNone(app.allow_downgrade_from)
+                        app.begin_update("authored-game")
+                        self.assertEqual(events, expected + ["confirm"])
+
+    def test_confirmed_downgrade_handoff_binds_both_versions(self):
+        class Handoff(BaseException):
+            pass
+        app, events = handlers(True, run_worker=True)
+        app.latest, app.fetched, app.switching = "v2.0.14", False, lambda: True
+        with mock.patch.object(linux_update, "game_version", return_value=("v2.2.0", True)), \
+             mock.patch.object(linux_update, "running_root", return_value="authored-appdir"), \
+             mock.patch.object(linux_update, "startup_manifest", return_value=types.SimpleNamespace(tag="v2.0.14")), \
+             mock.patch.object(linux_update, "tools_tag", return_value="v2.1.0"), \
+             mock.patch.object(linux_update, "read_manifest", return_value=None), \
+             mock.patch.object(linux_update, "install", return_value="authored-apprun"), \
+             mock.patch.dict(os.environ), mock.patch.object(os, "execv", side_effect=Handoff) as handoff:
+            with self.assertRaises(Handoff):
+                app.begin_update("authored-game")
+            self.assertEqual(events, ["confirm", "progress", "worker"])
+            handoff.assert_called_once_with("authored-apprun", ["authored-apprun", "--update", "authored-game", "--tag", "v2.0.14", "--fetched", "--allow-downgrade-from", "v2.2.0"])
+
+    def test_cli_handoff_passes_consent_to_the_builder(self):
+        tree = ast.parse((ROOT / "builder/linux/hookshot_builder.py").read_text(encoding="utf-8"))
+        main = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "main")
+        args = ["review", "--update", "authored-game", "--tag", "v2.0.14", "--fetched", "--allow-downgrade-from", "v2.2.0"]
+        received = []
+        def argument(name):
+            return args[args.index(name) + 1] if name in args else None
+        namespace = dict(sys=types.SimpleNamespace(argv=args), _arg=argument,
+                         Builder=lambda **kw: received.append(kw) or types.SimpleNamespace(mainloop=lambda: None))
+        exec(compile(ast.Module(body=[main], type_ignores=[]), "production-main", "exec"), namespace)
+        namespace["main"]()
+        self.assertEqual(received, [dict(update="authored-game", fetched=True, tag="v2.0.14", allow_downgrade_from="v2.2.0")])
+
+    def test_fetched_handoff_must_actually_run_the_requested_tools(self):
+        for tools in ("v2.1.0", None):
+            app, events = handlers(False, run_worker=True)
+            app.tools, app.update_tag = tools, "v2.0.14"
+            with mock.patch.object(linux_update, "game_version", return_value=("v1.0.0", True)):
+                app.begin_update("authored-game")
+            self.assertEqual(events[:2], ["progress", "worker"])
+            self.assertEqual(events[2][0], "update-error")
+            self.assertIn("not the requested v2.0.14", events[2][1])
+
 
 @unittest.skipUnless(sys.platform.startswith("linux"), "actual POSIX folder launcher")
 class FolderDispatch(unittest.TestCase):

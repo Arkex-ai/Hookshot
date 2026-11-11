@@ -337,7 +337,7 @@ def _arg(name):
 
 
 class Builder(tk.Tk):
-    def __init__(self, launch=None, update=None, fetched=False, tag=None):
+    def __init__(self, launch=None, update=None, fetched=False, tag=None, allow_downgrade_from=None):
         super().__init__()
         self.title("Hookshot Builder")
         self.apply_scale()
@@ -351,6 +351,7 @@ class Builder(tk.Tk):
         self.update_folder = update
         self.fetched = fetched
         self.update_tag = tag
+        self.allow_downgrade_from = allow_downgrade_from
         self.mode = "build"
         self.latest = None
         self.source_picked = False
@@ -951,8 +952,13 @@ class Builder(tk.Tk):
     def begin_update(self, folder=None):
         folder = self.update_folder if folder is None else folder
         target = self.update_tag or linux_update.update_target(self.latest, self.tools, self.switching())
-        if folder and not self.older_ok(target, linux_update.game_version(folder)[0]):
+        have = linux_update.game_version(folder)[0] if folder else None
+        approved = bool(have and self.fetched and self.tools == self.update_tag == target and
+                        getattr(self, "allow_downgrade_from", None) == have)
+        if folder and not approved and not self.older_ok(target, have):
             return   # (before changing pages or starting any download/build, including the launcher button)
+        self.allow_downgrade_from = None   # (the handoff's consent is for this attempt and these two versions)
+        downgrade_from = have if linux_update.older_version(target, have) else None
         if folder is not None:
             self.update_folder = folder
         self.show_progress("Updating your game" if self.update_folder else "Updating Hookshot Builder")
@@ -963,6 +969,9 @@ class Builder(tk.Tk):
 
         def run():
             try:
+                if fetched and target and self.tools != target:
+                    raise RuntimeError("This Builder is %s, not the requested %s. Start that version's Builder to update." %
+                                       (self.tools or "unversioned", target))
                 if not fetched:
                     root = linux_update.running_root()
                     if root is None:
@@ -983,6 +992,8 @@ class Builder(tk.Tk):
                         args = [apprun]
                         if folder:
                             args += ["--update", folder, "--tag", manifest.tag, "--fetched"]
+                            if downgrade_from:
+                                args += ["--allow-downgrade-from", downgrade_from]
                         os.execv(apprun, args)
                 self.lines.put(("do-build", folder or ""))
             except Exception as error:
@@ -1276,7 +1287,8 @@ def main():
     launch = _arg("--launch")
     update = _arg("--update")
     if update is not None:
-        Builder(update=update, fetched="--fetched" in sys.argv[1:], tag=_arg("--tag")).mainloop()
+        Builder(update=update, fetched="--fetched" in sys.argv[1:], tag=_arg("--tag"),
+                allow_downgrade_from=_arg("--allow-downgrade-from")).mainloop()
     elif launch:
         Builder(launch=launch).mainloop()
     else:

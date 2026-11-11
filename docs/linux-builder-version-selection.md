@@ -29,6 +29,12 @@ The downloaded release list must also name the selected target before installati
 tools. If GitHub's API and download list disagree during a release, the update stops with a retry message instead
 of rebuilding with a different version.
 
+When a confirmed downgrade installs another Builder, its internal handoff carries `--allow-downgrade-from` with
+the game's version, alongside the requested `--tag` and `--fetched`. The receiving Builder consumes it once only
+when its own version matches that target and the game still has the confirmed version. A legacy `--fetched`
+handoff alone grants no downgrade consent; a changed game is asked again. Fetched tools that do not match the
+requested version are refused before rebuilding.
+
 Ordering follows the existing `release_key` contract: numeric release versions, release candidates before their
 release, and git-describe builds after their tag. Arbitrary hashes and two different nightlies are not commit
 ancestry evidence; their existing update policy is unchanged. The new launcher's explicit release selector is
