@@ -1,5 +1,6 @@
 """Published WPF CLI: execute real startup and Runner with an authored child, never a game or GUI mode."""
 import argparse
+import ctypes
 import json
 import os
 from pathlib import Path
@@ -45,7 +46,9 @@ def main():
         assert (app / "coreclr.dll").is_file() and (app / "PresentationFramework.dll").is_file()
         # The authored tools fixture uses the trusted interpreter running this check, not another PATH entry.
         env["PATH"] = str(Path(os.sys.executable).parent) + os.pathsep + env.get("PATH", "")
-        def run(overrides, valid):
+        scenarios = 0
+        def run(overrides, valid, expected_home=None):
+            nonlocal scenarios
             result = subprocess.run([str(app / "HookshotBuilder.exe"), "--cli", "--authored-probe"],
                                     env=dict(env, **overrides), cwd=root, capture_output=True, text=True,
                                     encoding="utf-8", errors="replace", timeout=30,
@@ -53,14 +56,25 @@ def main():
             if valid:
                 assert result.returncode == 0, result.stdout + result.stderr
                 child = json.loads(next(x for x in result.stdout.splitlines() if x.startswith("{")))
-                assert Path(child["home"]) == home and child["portable"] == "1", child
+                # .NET expands DOS aliases such as RUNNER~1; textual equality does not identify the directory.
+                assert Path(child["home"]).samefile(expected_home or home) and child["portable"] == "1", child
             else:
                 assert result.returncode == 1, result.stdout + result.stderr
                 assert "error The Builder home could not be opened." in result.stdout
                 assert "Unhandled exception" not in result.stderr
                 assert not any(x.startswith("{") for x in result.stdout.splitlines())
+            scenarios += 1
         run({"HOOKSHOT_SETUP_BASE": str(home), "HOOKSHOT_BUILDER_PORTABLE": "1"}, True)
         run({}, True)
+        short_path = ctypes.windll.kernel32.GetShortPathNameW
+        short_path.argtypes = [ctypes.c_wchar_p, ctypes.POINTER(ctypes.c_wchar), ctypes.c_uint32]
+        short_path.restype = ctypes.c_uint32
+        buffer = ctypes.create_unicode_buffer(32768)
+        length = short_path(str(home), buffer, len(buffer))
+        alias = Path(buffer.value) if 0 < length < len(buffer) else home
+        alias_available = str(alias).lower() != str(home).lower()
+        if alias_available:
+            run({"HOOKSHOT_SETUP_BASE": str(alias), "HOOKSHOT_BUILDER_PORTABLE": "1"}, True, alias)
         moved = root / "Relocated ü, volume"
         home.parent.rename(moved)
         app = moved / app.relative_to(home.parent)
@@ -72,7 +86,8 @@ def main():
         run({}, False)
         marker.unlink()
         run({"HOOKSHOT_SETUP_BASE": str(home), "HOOKSHOT_BUILDER_PORTABLE": "1"}, False)
-        print("Published WPF startup: six no-window CLI/child/relocation/error scenarios passed")
+        print("Published WPF startup: %d CLI/child/relocation/error scenarios passed; DOS alias exercised: %s" %
+              (scenarios, alias_available))
 
 
 if __name__ == "__main__":
