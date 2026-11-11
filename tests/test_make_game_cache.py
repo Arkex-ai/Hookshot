@@ -238,7 +238,7 @@ class NupCacheTests(unittest.TestCase):
             self.assertIn("1 damaged file with no replacement", self.output)
             note = self.out / make_game.DAMAGED_NOTE
             self.assertTrue(note.is_file(), "the unresolved failure must leave the damaged-file report")
-            self.assertIn("only_Alb.bntx.zs: nothing similar found", note.read_text(encoding="utf-8"))
+            self.assertIn("only_Alb.bntx.zs: no replacement found; build cannot continue", note.read_text(encoding="utf-8"))
             self.assertFalse((self.out / ".hookshot_romfs_checked").exists())
             self.assertEqual(heads.read_bytes(), original_heads)
             self.assertEqual(broken.read_bytes(), bytes(32))
