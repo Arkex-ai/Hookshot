@@ -30,6 +30,8 @@ def main():
 #include <stdio.h>
 #include <string.h>
 #include <wchar.h>
+#include <stdarg.h>
+#include <stdlib.h>
 static int deny_writes;
 static HANDLE fixture_open(LPCWSTR path,DWORD access,DWORD share,LPSECURITY_ATTRIBUTES security,DWORD creation,DWORD flags,HANDLE template_file) {
     if (deny_writes && (access & GENERIC_WRITE)) { SetLastError(ERROR_WRITE_PROTECT); return INVALID_HANDLE_VALUE; }
@@ -39,6 +41,7 @@ static HANDLE fixture_open(LPCWSTR path,DWORD access,DWORD share,LPSECURITY_ATTR
 #include "portable_home.h"
 static HbHome g_home;
 static int g_home_ok;
+static void fail(const wchar_t *format, ...) { (void)format; exit(90); }
 static wchar_t module[MAX_PATH], profile[MAX_PATH], started[4096], workdir[MAX_PATH];
 static DWORD fake_module(HMODULE m, wchar_t *out, DWORD cap) {
     (void)m; if (wcslen(module) >= cap) return cap;
@@ -56,7 +59,7 @@ static BOOL fake_close(HANDLE h) {(void)h;return TRUE;}
 #define SHGetFolderPathW fake_profile
 #define CreateProcessW fake_process
 '''
-    for marker in ("static void mkdirs(", "static int portable_prefix(", "static int init_home(",
+    for marker in ("static int home_path(", "static void mkdirs(", "static int portable_prefix(", "static int init_home(",
                    "static void read_small(", "static int list_name_ok("):
         code += function(source, marker) + "\n"
     # read_small must close real fixture handles; only the synthetic process handles use fake_close.

@@ -28,8 +28,11 @@ def main():
 #include <windows.h>
 #include <stdio.h>
 #include <wchar.h>
+#include <stdarg.h>
+#include <stdlib.h>
 #include "portable_home.h"
 static HbHome g_home;
+static void fail(const wchar_t *format, ...) { (void)format; exit(90); }
 static const wchar_t *failed_stage;
 static BOOL move_fixture(LPCWSTR from, LPCWSTR to) {
     if (failed_stage && !wcscmp(from,failed_stage)) { SetLastError(ERROR_ACCESS_DENIED); return FALSE; }
@@ -39,7 +42,7 @@ static BOOL move_fixture(LPCWSTR from, LPCWSTR to) {
 '''
     part_end = source.index("} Part;") + len("} Part;")
     code += source[source.rfind("typedef struct", 0, part_end):part_end] + "\n"
-    for marker in ("static void rmtree(", "static void mkdirs(", "static void read_small(", "static int part_folder(",
+    for marker in ("static int home_path(", "static void rmtree(", "static void mkdirs(", "static void read_small(", "static int part_folder(",
                    "static int copy_part_tree(", "static int publish_install(", "static int reuse_part("):
         code += function(source, marker) + "\n"
     code += r'''
