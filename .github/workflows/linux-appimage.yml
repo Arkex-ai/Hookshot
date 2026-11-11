@@ -73,7 +73,9 @@ jobs:
             # indexes that depend on that key; retrying the base refresh first would stop at NO_PUBKEY (#2266).
             # --no-update only separates enrollment from the explicit, signed index refresh immediately afterward.
             # (libstdc++ 13, from the toolchain PPA: C++20 <format>; linked in statically)
-            add-apt-repository -y --no-update ppa:ubuntu-toolchain-r/test &&
+            # Launchpad metadata connections can hang past the entire job's hour. Give each retry a real chance;
+            # terminate enrollment after three minutes, then kill it if termination itself stalls.
+            timeout --kill-after=5s 180s add-apt-repository -y --no-update ppa:ubuntu-toolchain-r/test &&
               apt-get update &&
               apt-get install -y --no-install-recommends g++-13 libstdc++-13-dev &&
               apt-get install -y --no-install-recommends git ca-certificates curl xz-utils zstd file unzip python3 \
