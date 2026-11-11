@@ -5,7 +5,9 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
+import traceback
 
 ROOT = Path(__file__).resolve().parents[1]
 RUN_ALL_ARGS = ["--dotnet", "{dotnet}"]
@@ -65,4 +67,9 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        # run_all decodes child output as UTF-8; keep failure diagnostics printable on legacy Windows consoles too.
+        print(traceback.format_exc().encode("ascii", "backslashreplace").decode("ascii"), file=sys.stderr)
+        raise SystemExit(1)
