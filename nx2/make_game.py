@@ -486,12 +486,13 @@ def stand_in_damaged_files(out, romfs):
         with contextlib.suppress(FileNotFoundError):   # (a whole dump unpacked over a damaged one)
             os.remove(note)
     else:
-        lines = ["Your game dump is incomplete: %d game file%s in it %s damaged. Similar files are used where available, "
+        lines = ["Your game dump is incomplete: %d game file%s in it %s damaged (a complete dump is about 23.8 GB, an incomplete "
+                 "one 23.3 GB). Similar files are used where available, "
                  "with different textures in those places. Dump the game again for the original files:" %
                  (len(done), "" if len(done) == 1 else "s", "is" if len(done) == 1 else "are")]
         for path, other in done:
             lines.append("  %s: %s" % (os.path.relpath(path, romfs),
-                                       "in its place " + os.path.basename(other) if other else "nothing similar found, left as it is"))
+                                       "in its place " + os.path.basename(other) if other else "no replacement found; build cannot continue"))
         for line in lines:
             print(line, flush=True)
         # (#2237: keep the list even when an unresolved file stops this build, before marking a successful check)
