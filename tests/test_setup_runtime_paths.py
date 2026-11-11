@@ -38,24 +38,30 @@ def fixture(source):
 #include <wchar.h>
 #include <string.h>
 #include <setjmp.h>
-static wchar_t profile[MAX_PATH];
+#include <stdarg.h>
+static struct { wchar_t root[MAX_PATH]; int portable; } g_home;
+static int g_home_ok=1;
+static wchar_t last_error[2048];
 static int moves, markers, receipts, starts;
 static jmp_buf failed;
 struct Part { int unused; };
-static HRESULT fixture_profile(HWND, int, HANDLE, DWORD, LPWSTR out) { wcscpy(out,profile); return S_OK; }
 static BOOL fixture_start(LPCWSTR, LPWSTR, LPSECURITY_ATTRIBUTES, LPSECURITY_ATTRIBUTES, BOOL, DWORD,
                          LPVOID, LPCWSTR, LPSTARTUPINFOW, LPPROCESS_INFORMATION pi) {
     starts++; pi->hThread=NULL; pi->hProcess=NULL; return TRUE;
 }
 static BOOL fixture_move(LPCWSTR, LPCWSTR) { moves++; return TRUE; }
-static void fail(const wchar_t *, ...) { longjmp(failed,90); }
+static int publish_install(const wchar_t *from, const wchar_t *to, int) { return fixture_move(from,to); }
+static void fail(const wchar_t *format, ...) {
+    va_list args; va_start(args,format); vswprintf(last_error,2048,format,args); va_end(args); longjmp(failed,90);
+}
 static void write_small(const wchar_t *, const char *) { markers++; }
 static void write_parts(const wchar_t *, const Part *, int) { receipts++; }
-#define SHGetFolderPathW fixture_profile
 #define CreateProcessW fixture_start
 #define MoveFileW fixture_move
 '''
     code += function(source, "static int builder_ready(") + '\n'
+    code += function(source, "static int home_path(") + '\n'
+    code += function(source, "static int list_name_ok(") + '\n'
     code += function(source, "static void read_small(") + '\n'
     code += function(source, "static int launch_installed(") + '\n'
     code += '\nstatic int admission(const wchar_t *exe, const wchar_t *marker, int repair) { return (' + condition + '); }\n'
@@ -73,9 +79,10 @@ static int stage(const wchar_t *folder) {
 int main(void) {
     int argc; wchar_t **argv=CommandLineToArgvW(GetCommandLineW(),&argc);
     if(!argv || argc!=5) return 2;
-    wcscpy(profile,argv[1]);
+    swprintf(g_home.root,MAX_PATH,L"%ls\\HookshotBuilder",argv[1]);
     int reuse=admission(argv[2],argv[3],0), repair=admission(argv[2],argv[3],1);
     int published=stage(argv[4]);
+    if(published && (!wcsstr(last_error,L"antivirus") || !wcsstr(last_error,argv[4]))) return 5;
     int launched=launch_installed(L"--launch authored-game");
     printf("%d %d %d %d %d %d %d %d\n",reuse,repair,published,moves,markers,receipts,launched,starts);
     LocalFree(argv); return 0;
