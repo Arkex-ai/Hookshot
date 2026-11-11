@@ -902,10 +902,17 @@ def _cleanup_owns(q, work, default_work):
         if works:
             # build.py gets OOT_WORK through its environment; it has no --work option.
             return entry != "build.py" and all(w == work for w in works)
-        # A default only belongs to this installation when the entry point is proven.
-        return (entry == "make_game.py" and _cleanup_path(script) is not None
-                and _cleanup_path(script) == _cleanup_path(__file__)
-                and work == _cleanup_path(default_work))
+        # Versions share the default work folder. An update must also recognize the
+        # packaged entry point of an earlier version, not arbitrary make_game scripts.
+        path, home = _cleanup_path(script), _cleanup_path(default_work)
+        if entry != "make_game.py" or path is None or work != home:
+            return False
+        if path == _cleanup_path(__file__):
+            return True
+        prefix = home.rstrip("\\") + "\\"
+        parts = path[len(prefix):].split("\\") if path.startswith(prefix) else []
+        return (len(parts) == 6 and parts[0] == "versions" and bool(parts[1])
+                and parts[2:] == ["hookshotbuilder", "tools", "nx2", "make_game.py"])
     if name not in ("clang.exe", "clang++.exe", "clang-cl.exe", "ld.lld.exe", "lld-link.exe"):
         return False
     outputs = []
@@ -937,6 +944,8 @@ def _cleanup_build_child(child, parent):
 
 def stop_stray_compilers(work, default_work):
     """Best-effort cleanup for issues 501/530, restricted to proven target outputs/work.
+    An interrupted Builder update can leave a compiler holding a64_fpx.h (Errno 22)
+    or its output executable (WinError 1224), including across packaged versions.
     Unknown orphan ownership is preserved. Never terminate an unexamined child tree."""
     if LINUX:
         return
@@ -945,6 +954,8 @@ def stop_stray_compilers(work, default_work):
     try:
         r = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps], capture_output=True, text=True, timeout=90)
         if r.returncode:
+            print("could not look for an earlier build's processes: process query exited with status %d"
+                  % r.returncode, flush=True)
             return
         procs = json.loads(r.stdout or "[]")
         if isinstance(procs, dict):

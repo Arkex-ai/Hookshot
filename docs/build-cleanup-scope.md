@@ -7,7 +7,10 @@ The process table includes every process, so the current process's full ancestor
 non-Python launchers. Eligible processes must have positive command-line ownership:
 
 - `make_game.py` and `lift.py` require an explicit absolute `--work` argument matching the selected folder. The
-  default is accepted only for the absolute `make_game.py` entry point of this installation. `build.py` gets its
+  default is accepted only for this installation's absolute `make_game.py` entry point or the exact packaged shape
+  `<default home>/versions/<version>/HookshotBuilder/tools/nx2/make_game.py`. Packaged versions share that default
+  work folder, so cleanup must recognize an interrupted build from a previous version after an update. A different
+  home, sibling prefix, extra path component or selected custom work is not inferred from that shape. `build.py` gets its
   folder through `OOT_WORK`; an orphan's environment is unavailable in this snapshot, so it is preserved. A direct
   `build.py --standalone` child of a proven, live `make_game.py` can be selected when its entry point matches that
   parent's installation: the builder launches it in ROOT with that work folder in the environment. This proof is

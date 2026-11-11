@@ -97,6 +97,21 @@ class CleanupTests(unittest.TestCase):
                 row(8, "clang++.exe", ["clang++", "-o", "relative.o"])]
         self.assertEqual(self.invoke(rows)[0], [4, 5, 6])
 
+    def test_default_work_across_packaged_builder_versions(self):
+        home = r"C:\Users\authored user\AppData\Local\HookshotBuilder"
+        old = home + r"\versions\v-old\HookshotBuilder\tools\nx2\make_game.py"
+        rows = [row(10, "python.exe", ["python", "-I", old]),
+                row(11, "python.exe", ["python", "nx2/build.py", "--standalone"], parent=10),
+                row(12, "clang.exe", ["clang", "-o", home + r"\sa\build\one.o"]),
+                row(20, "python.exe", ["python", r"D:\other\versions\v-old\HookshotBuilder\tools\nx2\make_game.py"]),
+                row(21, "python.exe", ["python", home + r"-other\versions\v-old\HookshotBuilder\tools\nx2\make_game.py"]),
+                row(22, "python.exe", ["python", home + r"\versions\v-old\extra\HookshotBuilder\tools\nx2\make_game.py"]),
+                row(23, "python.exe", ["python", home + r"\versions\v-old\other\tools\nx2\make_game.py"]),
+                row(24, "python.exe", ["python", old, "--work", r"D:\other"])]
+        self.assertEqual(self.invoke(rows, work=home, default=home)[0], [10, 12, 11])
+        # A packaged script's implicit folder never establishes a selected custom work.
+        self.assertEqual(self.invoke(rows, work=WORK, default=home)[0], [])
+
     def test_ancestors_across_non_python_parents_and_unknown_children(self):
         rows = [python(100, parent=101), row(101, "launcher.exe", "launcher", parent=102),
                 python(102, parent=103), row(103, "cmd.exe", "cmd", parent=0),
@@ -124,7 +139,9 @@ class CleanupTests(unittest.TestCase):
     def test_empty_single_row_query_and_nonfatal_failures(self):
         self.assertEqual(self.invoke([])[0], [])
         self.assertEqual(self.invoke(python(1))[0], [1])
-        self.assertEqual(self.invoke([python(1)], query_code=1)[0], [])
+        calls, log = self.invoke([python(1)], query_code=1)
+        self.assertEqual(calls, [])
+        self.assertIn("could not look for an earlier build's processes", log)
         self.assertEqual(self.invoke([python(1)], error=TimeoutError("authored timeout"))[0], [])
         calls, log = self.invoke([python(1)], kill_code=1)
         self.assertEqual(calls, [1])
