@@ -13,6 +13,11 @@ This checks the startup contract, not every optional runtime assembly or the con
 The archive's SHA-256 verification remains separate. The required-file list in `builder/setup/setup.c` must change
 with any future switch away from the directory-based WPF publish format.
 
+![Setup stops before publishing an incomplete runtime](images/setup-runtime-incomplete.png)
+
+The native message above was captured from the production readiness guard and error-dialog function with an
+authored missing-runtime fixture. It is not a screenshot of a complete download/extraction test or of the reporter's installation.
+
 If setup cannot complete the runtime, rerun the official setup and inspect the reported extraction/download error.
 The game folder's direct-game fallback remains available; a failed Builder readiness check does not run the
 incomplete Builder. The fixtures in `tests/test_setup_runtime*.py` use authored files and intercept process start
