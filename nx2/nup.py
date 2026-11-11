@@ -492,8 +492,9 @@ def out_of_space(error, dst, part, rel, size):
 def extract(nup, t, out, only=None, quiet=False):
     total = n = written = 0
     digests = {}
-    if only != "exefs" and isinstance(nup, Nup):
-        digests = {id(record): expected for record, (expected, _, _) in zip(nup.files, nup.file_details)
+    details = getattr(nup, "file_details", ())
+    if only != "exefs" and details:
+        digests = {id(record): expected for record, (expected, _, _) in zip(nup.files, details)
                    if expected != bytes(32)}
     interval = 2
     next_report = 0 if quiet else monotonic() + interval
