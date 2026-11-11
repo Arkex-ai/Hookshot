@@ -16,6 +16,11 @@ The default button is **Play** when the known update target is older than the ga
 GitHub is unavailable and only the running tools' version is known. The launcher explains the difference instead
 of offering the older target as a new update.
 
+![Tk launcher preview on Windows with authored game v2.2.0 and Builder v2.1.0 metadata; no real game](images/linux-builder-newer-game.png)
+
+The preview runs the production Tk launcher on Windows with authored metadata. It shows the new message;
+it is not a Linux window, real AppImage update or gameplay validation.
+
 Choosing another update track can still select an older version. Before that rebuild starts, the Builder asks
 for confirmation. The same confirmation protects other rebuild entry points, including changing NVIDIA DLSS
 while using older tools. Declining starts no download or build and leaves the page in place.
