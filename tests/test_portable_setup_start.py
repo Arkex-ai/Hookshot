@@ -30,6 +30,12 @@ def main():
 #include <stdio.h>
 #include <string.h>
 #include <wchar.h>
+static int deny_writes;
+static HANDLE fixture_open(LPCWSTR path,DWORD access,DWORD share,LPSECURITY_ATTRIBUTES security,DWORD creation,DWORD flags,HANDLE template_file) {
+    if (deny_writes && (access & GENERIC_WRITE)) { SetLastError(ERROR_WRITE_PROTECT); return INVALID_HANDLE_VALUE; }
+    return CreateFileW(path,access,share,security,creation,flags,template_file);
+}
+#define CreateFileW fixture_open
 #include "portable_home.h"
 static HbHome g_home;
 static int g_home_ok;
@@ -65,8 +71,9 @@ int wmain(int argc, wchar_t **argv) {
     wcscpy(command,L"--portable-other --cli"); CHECK(!portable_prefix(command));
     wcscpy(command,L"--portable"); CHECK(portable_prefix(command) && !*command);
     int mode = _wtoi(argv[4]);
-    g_home_ok = init_home(mode == 1);
-    if (mode == 2) { CHECK(!g_home_ok); return 0; }
+    deny_writes = mode == 4;
+    g_home_ok = init_home(mode == 1 || mode == 4);
+    if (mode == 2 || mode == 4) { CHECK(!g_home_ok); return 0; }
     CHECK(g_home_ok && !wcscmp(g_home.root,argv[3]));
     CHECK(g_home.portable == (mode != 3));
     wchar_t inherited[MAX_PATH];
@@ -117,11 +124,15 @@ int wmain(int argc, wchar_t **argv) {
         run(root / "standard-setup.exe", profile / "HookshotBuilder", 3)
         run(root / "downloaded-setup.exe", home, 2, {"HOOKSHOT_SETUP_BASE": "relative"})
         run(root / "downloaded-setup.exe", home, 2, {"HOOKSHOT_SETUP_BASE": str(profile), "HOOKSHOT_BUILDER_PORTABLE": "1"})
+        readonly = root / "write-protected fixture"
+        readonly.mkdir()
+        run(root / "downloaded-setup.exe", readonly, 4, {"HOOKSHOT_SETUP_BASE": str(readonly)})
+        assert not (readonly / ".hookshot-portable").exists()
         marker = home / ".hookshot-portable"
         marker.write_text("broken")
         run(moved / "Setup.exe", home, 2)
         assert not profile.exists(), "No persistent AppData writes expected during fixture startup"
-        print("portable setup: 11 startup scenarios passed; real roots/environment/markers, intercepted process launch")
+        print("portable setup: 12 startup scenarios passed; write-protected file boundary, real roots/environment/markers, intercepted process launch")
 
 
 if __name__ == "__main__":

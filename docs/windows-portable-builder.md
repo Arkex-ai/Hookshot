@@ -17,6 +17,8 @@ Builder, and paths selected on the same volume are saved relative to the Builder
 absolute and may need selecting again after moving. Desktop and Start menu shortcuts start unchecked in portable
 mode; selecting them explicitly creates shortcuts on that PC.
 
+![Portable destination and build-files folders, shown in an isolated layout check](images/windows-portable-folders.png)
+
 The original setup can be opened again without the flag while its marked data folder is beside it. The installed
 Builder also discovers its marked home when opened directly. Updates, repair and the older ZIP update fallback use
 that same home. No user/system environment variables or registry configuration are installed. Windows, .NET and
