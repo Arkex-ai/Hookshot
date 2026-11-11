@@ -1519,17 +1519,20 @@ static int game_main(int argc, char **argv) {
         if (hos_native_scene) hos_log("boot: HOS_SCENE_NATIVE=1: the scene's base scale 1.0 (the game's 0.8 otherwise)");
         extern volatile uint64_t hos_wide_out, hos_wide_scene;
         extern volatile float hos_wide_ratio, hos_wide_squeeze, hos_wide_margin;
+        uint32_t hos_output_size(int height);
+        const uint32_t output_w = hos_output_size(0), output_h = hos_output_size(1);
+        /* A custom surround output explicitly requests that shape, even if the OS reports one monitor. */
+        if (hos_output_is_surround(output_w, output_h)) want = (float)output_w / (float)output_h;
         const double game = 16.0 / 9.0;
         /* (a screen narrower than 16:9 too, 16:10 to 5:4: the picture keeps the game's height and is narrower, the
            cameras take its ratio, and the HUD fills its width instead of a middle 16:9 wider than the screen. A 4:3 CRT
            at the 1440 output: picture 1920 x 1440, scene 1440 x 1080, HUD 100%) */
         if (want > game * 1.01 || (want > 1.0f && want < game * 0.99)) {
             const double r = hos_wide_clamp(want);
-            uint32_t hos_output_size(int height);   /* (host/nn_applet.c: the Output resolution's height, 1440 as shipped) */
             /* (the height kept, the width at the screen's ratio, at most 3840 x 2160's pixels with the shape kept:
                host/hos_wide_size.h, which the Insert menu's Output and Render resolution rows share; issue 1031) */
             unsigned ow, oh;
-            hos_wide_size(hos_output_size(1), r, hos_wide_max_px(), &ow, &oh);
+            hos_wide_size(output_h, r, hos_wide_max_px(), &ow, &oh);
             const unsigned sh = oh * 3 / 4, sw = (unsigned)(ow * 0.75 / 8 + 0.5) * 8;   /* (the scene, 3/4 of the picture as shipped) */
             hos_wide_out = (uint64_t)oh << 32 | ow;
             hos_wide_scene = (uint64_t)sh << 32 | sw;
