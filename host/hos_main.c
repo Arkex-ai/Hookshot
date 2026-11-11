@@ -5,7 +5,7 @@
    guest main thread, run every module's DT_INIT in rtld's order (the SDK crt's _init: TLS registration with musl,
    then the module's constructors), then nninitStartup and nnMain.
 
-   Usage: <game>.exe [image.bin] [--romfs <dir>] [--user <dir>] [--trace] [--prepare-shaders]
+   Usage: <game>.exe [image.bin] [--romfs <dir>] [--romfs-pack <file>] [--user <dir>] [--trace] [--prepare-shaders]
    Environment: HOS_TRACE=1 (log HLE calls), HOS_MEMORY_MB (memory the game is told it has),
                 HOS_NVN_CONTINUE=1 (go on past nvnBootstrapLoader). */
 #include "hos.h"
@@ -86,6 +86,23 @@ extern const uint64_t hos_entry_init_libc0, hos_entry_init_libc1, hos_entry_init
     hos_entry_nninitInitializeSdkModule;
 /* nn_fs.c */
 extern const char *hos_romfs_dir, *hos_user_dir;
+/* Explicit selection is authoritative: an invalid image must not silently use an older loose folder. */
+static int select_romfs_pack(const char *path) {
+    if (!path) return 1;
+#ifdef A64_MEM_ZERO
+    fprintf(stderr, "--romfs-pack is supported by desktop builds only\n");
+    return 0;
+#else
+    if (!hos_romfs_dir) hos_romfs_dir = "romfs";
+    if (!hos_fs_pack_open(path)) {
+        fprintf(stderr, "cannot open the selected RomFS pack: %s\n"
+                        "The pack is missing, incomplete, invalid or unreadable. Recreate it from your verified folder, "
+                        "or remove --romfs-pack to use the folder explicitly.\n", path);
+        return 0;
+    }
+    return 1;
+#endif
+}
 
 /* HOS_LARGE_PAGES=1 (experiment): the guest window in 2 MB pages, for fewer TLB misses (the game touches hundreds of MB
    of scattered heap; 4 KB pages cover only ~12 MB of it in the CPU's TLB). The whole window is then physical memory at
@@ -1793,9 +1810,16 @@ static int game_main(int argc, char **argv) {
     removed_switch_notes();
     void hos_control_start(const char *version);
     hos_control_start(HOOKSHOT_VERSION);   /* (HOS_CONTROL=<socket>: the control bridge, host/control.c) */
-    const char *image = NULL;
+    const char *image = NULL, *romfs_pack = NULL;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--romfs") && i + 1 < argc) hos_romfs_dir = argv[++i];
+        else if (!strcmp(argv[i], "--romfs-pack")) {
+            if (i + 1 >= argc || !argv[i + 1][0] || argv[i + 1][0] == '-') {
+                fprintf(stderr, "--romfs-pack needs a file path\n");
+                return 2;
+            }
+            romfs_pack = argv[++i];
+        }
         else if (!strcmp(argv[i], "--user") && i + 1 < argc) hos_user_dir = argv[++i];
         else if (!strcmp(argv[i], "--trace")) hos_trace = 1;
         else if (!strcmp(argv[i], "--prepare-shaders")) {   /* (hookshot) a build's last step: no game */
@@ -1847,10 +1871,11 @@ static int game_main(int argc, char **argv) {
         }
     }
     if (!image) {
-        fprintf(stderr, "usage: %s [image.bin] [--romfs <dir>] [--user <dir>] [--trace] [--prepare-shaders]\n",
+        fprintf(stderr, "usage: %s [image.bin] [--romfs <dir>] [--romfs-pack <file>] [--user <dir>] [--trace] [--prepare-shaders]\n",
                 argv[0]);
         return 2;
     }
+    if (!select_romfs_pack(romfs_pack)) return 1;
     if (env_on("HOS_TRACE")) hos_trace = 1;
     if (!hos_user_dir) hos_user_dir = "user";
     CreateDirectoryA(hos_user_dir, NULL);
@@ -2054,7 +2079,7 @@ int main(int argc, char **argv) {
     int prepare_shaders = 0;
     for (int i = 1; i < argc; i++) {
         if (!strcmp(argv[i], "--prepare-shaders")) prepare_shaders = 1;
-        else if (!strcmp(argv[i], "--romfs") || !strcmp(argv[i], "--user")) i++;
+        else if (!strcmp(argv[i], "--romfs") || !strcmp(argv[i], "--romfs-pack") || !strcmp(argv[i], "--user")) i++;
     }
     /* The builder's preparation worker needs Vulkan, but no SDL display. */
     const int window = prepare_shaders ? 0 : hos_display_init();

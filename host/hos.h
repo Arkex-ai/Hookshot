@@ -146,6 +146,8 @@ void hos_thread_wake(HosThread *t);
 
 /* ---- for host-side devices: game files by guest path (nn_fs.c), guest events (nn_os_sync.c) */
 int hos_fs_host_path(const char *guest, char *out, size_t cap);
+int hos_fs_pack_open(const char *path);   /* optional read-only image, selected once before guest threads */
+int hos_fs_romfs_read(const char *rel, uint64_t offset, void *out, uint64_t size, uint64_t *length);
 void hos_event_signal(uint64_t guest_event);
 
 /* ---- videos (movie_mf.c): a video file read as compressed samples or as decoded NV12 frames */

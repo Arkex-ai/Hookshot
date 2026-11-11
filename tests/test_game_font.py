@@ -6,8 +6,10 @@ every letter as an empty box (issue 1279, as #1405 did for the old Linux menu fo
     python -I -B tests/test_game_font.py [--cxx g++]
 """
 import argparse
+import os
 import struct
 import subprocess
+import shutil
 import tempfile
 from pathlib import Path
 
@@ -57,9 +59,15 @@ def main():
     p.add_argument("--cxx", default="g++")
     a = p.parse_args()
     # (the C compiler beside the C++ one: g++ -> gcc, clang++ -> clang, x86_64-...-g++ -> x86_64-...-gcc)
-    cc = a.cxx[:-2] if a.cxx.endswith("++") else "cc"
-    if Path(cc).name == "g" or cc.endswith("-g"):
-        cc += "cc"
+    tool = Path(a.cxx)
+    suffix = '.exe' if tool.name.lower().endswith('.exe') else ''
+    name = tool.name[:-len(suffix)] if suffix else tool.name
+    cc_name = name[:-2] if name.endswith('++') else 'cc'
+    if cc_name == 'g' or cc_name.endswith('-g'):
+        cc_name += 'cc'
+    if cc_name == 'c':
+        cc_name = 'cc'
+    cc = str(tool.with_name(cc_name + suffix))
     flags = ["-O1", "-DZSTD_DISABLE_ASM", "-DZSTD_LEGACY_SUPPORT=0", "-DZSTD_MULTITHREAD=0", "-I" + str(ZSTD),
              "-I" + str(ROOT / "third_party/imgui")]
     with tempfile.TemporaryDirectory(prefix="game-font-") as tmp:
@@ -77,7 +85,10 @@ def main():
         latin, hebrew = Path(tmp) / "latin.ttf", Path(tmp) / "hebrew.ttf"
         latin.write_bytes(font(ord("A"), ord("a")))
         hebrew.write_bytes(font(0x05D0))
-        subprocess.run([str(exe), str(files), str(latin), str(hebrew)], check=True)
+        env = dict(os.environ)
+        compiler = Path(shutil.which(a.cxx) or a.cxx).resolve()
+        env['PATH'] = str(compiler.parent) + os.pathsep + env.get('PATH', '')
+        subprocess.run([str(exe), str(files), str(latin), str(hebrew)], check=True, env=env)
 
 
 if __name__ == "__main__":

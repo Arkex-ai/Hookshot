@@ -76,6 +76,19 @@ static void write(const fs::path& p, const Bytes& b) {
     fwrite(b.data(), 1, b.size(), f);
     fclose(f);
 }
+static std::string asset_root;
+static int asset_fault;
+static int authored_asset(const char *name, uint64_t offset, void *out, uint64_t size, uint64_t *length) {
+    Bytes bytes;
+    if (!read_file(asset_root + "/" + name, bytes)) return 0;
+    *length = bytes.size();
+    if (asset_fault == 1) { *length = (64u << 20) + 1; return 1; }
+    if (offset > bytes.size() || size > bytes.size() - offset) return 0;
+    if (out && size) memcpy(out, bytes.data() + (size_t)offset, (size_t)size);
+    if (out && asset_fault == 2) return 0;
+    if (out && asset_fault == 3) ++*length;
+    return 1;
+}
 
 int main(int argc, char** argv) {
     if (argc < 4) return 2;
@@ -102,6 +115,25 @@ int main(int argc, char** argv) {
         CHECK("opens", r.open((root / "good").string()));
         CHECK("the font back", r.read("Test") == font);
         CHECK("a font it does not have", r.read("Other").empty());
+    }
+    {
+        asset_root = (root / "good").string();
+        Reader r;
+        CHECK("callback opens with no loose root", r.open("", authored_asset));
+        CHECK("callback returns exact authored font", r.read("Test") == font);
+        CHECK("missing callback font", r.read("Other").empty());
+        asset_fault = 1;
+        CHECK("oversized callback asset refused", r.read("Test").empty());
+        asset_fault = 2;
+        CHECK("failed callback read refused", r.read("Test").empty());
+        asset_fault = 3;
+        CHECK("changed callback length refused", r.read("Test").empty());
+        asset_fault = 0;
+        CHECK("callback recovery", r.read("Test") == font);
+        asset_fault = 2;
+        CHECK("failed reopen clears prior dictionary", !r.open("", authored_asset));
+        CHECK("no stale dictionary after failed reopen", r.read("Test").empty());
+        asset_fault = 0;
     }
     // ---- a TrueType font (its tag 00 01 00 00) too ----
     {

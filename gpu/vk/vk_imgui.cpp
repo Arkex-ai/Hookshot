@@ -55,7 +55,7 @@ std::string romfs_dir() {
 ImFont* game_font(const char* name) {
     static game_font::Reader reader;
     static bool opened = false, open = false;
-    if (!opened) opened = true, open = reader.open(romfs_dir());
+    if (!opened) opened = true, open = reader.open(romfs_dir(), host ? host->romfs_read : nullptr);
     if (!open) return nullptr;
     std::vector<unsigned char> bytes = reader.read(name);
     if (bytes.empty()) return nullptr;

@@ -63,6 +63,7 @@ typedef struct { uint64_t x[32]; } Ctx;
 #define GP(a) ((void *)(uintptr_t)(a))
 #define G64(a) (*(uint64_t *)GP(a))
 #define HOS_FS_PATH 1024
+#define FS_PATH_MAX 0x302
 #define R_PATH_NOT_FOUND 0x202
 static int hos_trace;
 static int fs_trace(void) { return 0; }
@@ -90,7 +91,20 @@ static HANDLE CreateFileA(const char *p, DWORD a, DWORD s, void *sa, DWORD d, DW
     held_in_create = held;
     return create_ok ? (HANDLE)(intptr_t)0x1234 : INVALID_HANDLE_VALUE;
 }
-typedef struct { HANDLE h; int writable; char path[HOS_FS_PATH]; } Handle;
+typedef struct { int directory; } RomfsPackEntry;
+typedef struct { int pack; } RomfsPackFile;
+static RomfsPackFile romfs_image;
+static int pack_selected, pack_present, pack_directory, held_in_pack;
+static int pack_path(const char *guest, const char *resolved, char *rel) {
+    (void)guest; (void)resolved; *rel = 0; held_in_pack = held; return pack_selected;
+}
+static const RomfsPackEntry *romfs_pack_file_find(const RomfsPackFile *pack, const char *rel) {
+    (void)pack; (void)rel;
+    static RomfsPackEntry entry;
+    entry.directory = pack_directory;
+    return pack_present ? &entry : NULL;
+}
+typedef struct { HANDLE h; int writable; char path[HOS_FS_PATH]; const RomfsPackEntry *packed; } Handle;
 static uint64_t new_handle(Handle *h) { free(h); return 7; }
 
 @OPEN@
@@ -149,6 +163,23 @@ int main(void) {
 
     r = open_file("rom:/a.bin", 1, 0);
     check(r == 0 && held == 0 && takes == 0, "a thread that held no core takes none");
+
+    pack_selected = pack_present = 1;
+    r = open_file("rom:/packed.bin", 1, 1);
+    check(r == 0 && held_in_pack == 0 && held_in_create == -1 && held == 1 && takes == 1,
+          "packed lookup runs without the core and takes it back once, without opening a loose file");
+    pack_present = 0;
+    r = open_file("rom:/missing.bin", 1, 1);
+    check(r == R_PATH_NOT_FOUND && held == 1 && held_in_create == -1,
+          "missing packed entry keeps the core and never falls back to a loose file");
+    pack_present = pack_directory = 1;
+    r = open_file("rom:/directory", 1, 1);
+    check(r == R_PATH_NOT_FOUND && held == 1 && held_in_create == -1, "packed directory is not a file");
+    pack_directory = 0;
+    set_env("HOS_NO_MOVIES", "1");
+    r = open_file("rom:/Movie/a.webm", 1, 1);
+    check(r == R_PATH_NOT_FOUND && held == 1 && held_in_create == -1, "packed movie still obeys no-movies policy");
+    set_env("HOS_NO_MOVIES", NULL);
     if (!bad) puts("ok");
     return bad;
 }

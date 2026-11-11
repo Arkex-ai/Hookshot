@@ -102,7 +102,9 @@ inline std::vector<unsigned char> bfotf_font(const std::vector<unsigned char>& r
 
 /// The game's fonts from a romfs folder: open() once (the dictionary), then read() each
 struct Reader {
+    using ReadAsset = int (*)(const char*, uint64_t, void*, uint64_t, uint64_t*);
     std::string romfs;
+    ReadAsset read_asset = nullptr;
     ZSTD_DDict* dict = nullptr;
     Reader() = default;
     Reader(const Reader&) = delete;
@@ -110,12 +112,23 @@ struct Reader {
     ~Reader() {
         if (dict) ZSTD_freeDDict(dict);
     }
-    bool open(std::string dir) {
-        if (dir.empty()) return false;
-        if (dir.back() != '/' && dir.back() != '\\') dir += '/';
+    bool load(const std::string& name, std::vector<unsigned char>& out) const {
+        if (!read_asset) return read_file(romfs + name, out);
+        uint64_t size = 0, actual = 0;
+        if (!read_asset(name.c_str(), 0, nullptr, 0, &size) || !size || size > (64u << 20)) return false;
+        out.resize((size_t)size);
+        if (!read_asset(name.c_str(), 0, out.data(), size, &actual) || actual != size) { out.clear(); return false; }
+        return true;
+    }
+    bool open(std::string dir, ReadAsset source = nullptr) {
+        if (dict) ZSTD_freeDDict(dict);
+        dict = nullptr;
+        read_asset = source;
+        if (dir.empty() && !read_asset) return false;
+        if (!dir.empty() && dir.back() != '/' && dir.back() != '\\') dir += '/';
         romfs = dir;
         std::vector<unsigned char> packed, pack, zsdic;
-        if (read_file(romfs + "Pack/ZsDic.pack.zs", packed) && unzstd(packed, nullptr, pack) && sarc_file(pack, "zs.zsdic", zsdic))
+        if (load("Pack/ZsDic.pack.zs", packed) && unzstd(packed, nullptr, pack) && sarc_file(pack, "zs.zsdic", zsdic))
             dict = ZSTD_createDDict(zsdic.data(), zsdic.size());
         return dict != nullptr;
     }
@@ -131,7 +144,7 @@ struct Reader {
     /// A font by name ("ClarimoUDPE-Regular"); empty when the files do not have it, or it has no Latin letters
     std::vector<unsigned char> read(const char* name) const {
         std::vector<unsigned char> packed, raw;
-        if (!dict || !read_file(romfs + "Font2/Scalable/" + name + ".Nin_Ounce_NVN2.bfotf.zs", packed) || !unzstd(packed, dict, raw))
+        if (!dict || !load(std::string("Font2/Scalable/") + name + ".Nin_Ounce_NVN2.bfotf.zs", packed) || !unzstd(packed, dict, raw))
             return {};
         std::vector<unsigned char> font = bfotf_font(raw);
         if (!font.empty() && !has_latin(font)) font.clear();

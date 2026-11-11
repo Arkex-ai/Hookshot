@@ -80,8 +80,57 @@ static BOOL fs_FindNextFile(HANDLE h, WIN32_FIND_DATAA *fd) {
 #define FindFirstFileA fs_FindFirstFile
 #define FindNextFileA fs_FindNextFile
 #endif
+#include "romfs_pack_file.h"   /* after the UTF-8 file wrappers */
 
 const char *hos_romfs_dir, *hos_user_dir;
+static RomfsPackFile romfs_image;
+static void close_romfs_image(void) { romfs_pack_file_close(&romfs_image); }
+/* Called once at startup, before guest threads; the image lives until process teardown. */
+int hos_fs_pack_open(const char *path) {
+    if (!path) return 1;
+    if (romfs_image.pack.read || !romfs_pack_file_open(&romfs_image, path)) return 0;
+    atexit(close_romfs_image);
+    hos_log("fs: packed RomFS: %u entries", romfs_image.pack.count);
+    return 1;
+}
+
+/* Host-side assets (native menu fonts), independent of guest mounts and guest memory.
+   NULL/zero buffer queries total length; other requests must complete exactly. */
+int hos_fs_romfs_read(const char *rel, uint64_t offset, void *out, uint64_t size, uint64_t *length) {
+    if (!length) return 0;
+    *length = 0;
+    if (!rel || !romfs_pack_name((const unsigned char *)rel, strlen(rel)) || size > SIZE_MAX || (!out && size)) return 0;
+    const int away = hos_vcore_away();
+    int ok = 0;
+    if (romfs_image.pack.read) {
+        const RomfsPackEntry *e = romfs_pack_file_find(&romfs_image, rel);
+        if (e && !e->directory) {
+            *length = e->size;
+            if (offset <= e->size && size <= e->size - offset) {
+                size_t done = 0;
+                ok = !size || romfs_pack_read(&romfs_image.pack, e, offset, out, (size_t)size, &done);
+            }
+        }
+    } else if (hos_romfs_dir) {
+        char path[HOS_FS_PATH];
+        int n = snprintf(path, sizeof path, "%s/%s", hos_romfs_dir, rel);
+        if (n >= 0 && (size_t)n < sizeof path) {
+            RomfsPackFile file = {0};
+            file.handle = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+            if (file.handle != INVALID_HANDLE_VALUE) {
+                LARGE_INTEGER bytes = {0};
+                if (GetFileSizeEx(file.handle, &bytes) && bytes.QuadPart >= 0) {
+                    *length = (uint64_t)bytes.QuadPart;
+                    if (offset <= *length && size <= *length - offset)
+                        ok = !size || romfs_pack_file_read(&file, offset, out, (size_t)size) == size;
+                }
+                CloseHandle(file.handle);
+            }
+        }
+    }
+    if (away) hos_vcore_back();
+    return ok;
+}
 
 #define R_PATH_NOT_FOUND 0x202          /* fs::ResultPathNotFound */
 #define R_PATH_EXISTS 0x402             /* fs::ResultPathAlreadyExists */
@@ -188,6 +237,40 @@ static int host_path(const char *guest_mem, char *out, size_t cap, int *writable
 /* For other OS layer parts that open game files themselves (videos): "mount:/a/b" -> host path, 0 if unknown. */
 int hos_fs_host_path(const char *guest, char *out, size_t cap) { return host_path(guest, out, cap, NULL); }
 
+/* True only for the original RomFS path after all higher-priority redirects have run.
+   A selected image is authoritative: a missing entry never falls back to an older extracted file. */
+static int pack_path(const char *guest, const char *resolved, char rel[FS_PATH_MAX]) {
+    if (!romfs_image.pack.read || !hos_romfs_dir) return 0;
+    const char *colon = strchr(guest, ':');
+    if (!colon) return 0;
+    const char *rest = colon + 1;
+    while (*rest == '/') ++rest;
+    if (!guest_path_ok(rest)) return 0;
+    int rom = 0;
+    AcquireSRWLockShared(&mount_lock);
+    for (int i = 0; i < nmounts; ++i)
+        if (strlen(mounts[i].name) == (size_t)(colon - guest) &&
+            !strncmp(mounts[i].name, guest, (size_t)(colon - guest))) {
+            rom = !mounts[i].writable && !strcmp(mounts[i].root, hos_romfs_dir);
+            break;
+        }
+    ReleaseSRWLockShared(&mount_lock);
+    if (!rom) return 0;
+    char base[HOS_FS_PATH];
+    if ((size_t)snprintf(base, sizeof base, "%s/%s", hos_romfs_dir, rest) >= sizeof base) return 0;
+    for (char *p = base; *p; ++p) if (*p == '/') *p = '\\';
+    if (strcmp(base, resolved)) return 0;
+    size_t n = 0;
+    for (; *rest; ++rest) {
+        if (*rest == '/' && (!n || rel[n - 1] == '/')) continue;
+        if (n + 1 >= FS_PATH_MAX) return 0;
+        rel[n++] = *rest;
+    }
+    if (n && rel[n - 1] == '/') --n;
+    rel[n] = 0;
+    return 1;
+}
+
 /* (hookshot) a guest string: "" unless it lies in guest memory and ends within FS_PATH_MAX bytes */
 static const char *gstr(uint64_t a) {
     if (!a || a >= (uint64_t)HOS_SPACE_END) return "";
@@ -209,6 +292,9 @@ typedef struct { char name[HOS_FS_PATH]; int is_dir; uint64_t size; } ExtraEntry
 typedef struct {
     HANDLE h; int writable; HANDLE find; WIN32_FIND_DATAA fd; int find_done, is_dir; char path[HOS_FS_PATH];
     ExtraEntry *extras; int nextras, extra_pos;
+    const RomfsPackEntry *packed;
+    RomfsPackDir pack_dir;
+    int packed_directory;
 } Handle;
 static Handle *handles[4096];
 static SRWLOCK handle_lock = SRWLOCK_INIT;
@@ -385,10 +471,15 @@ HLE(_ZN2nn2fs8OpenFileEPNS0_10FileHandleEPKci) {
             }
         }
     }
-    HANDLE h = CreateFileA(path, GENERIC_READ | (want_write ? GENERIC_WRITE : 0), FILE_SHARE_READ | FILE_SHARE_WRITE,
-                           NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    char rel[FS_PATH_MAX];
+    const int from_pack = !want_write && pack_path(g, path, rel);
+    const RomfsPackEntry *packed = from_pack ? romfs_pack_file_find(&romfs_image, rel) : NULL;
+    HANDLE h = INVALID_HANDLE_VALUE;
+    if (!from_pack)
+        h = CreateFileA(path, GENERIC_READ | (want_write ? GENERIC_WRITE : 0), FILE_SHARE_READ | FILE_SHARE_WRITE,
+                       NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
     if (away) hos_vcore_back();
-    if (h == INVALID_HANDLE_VALUE) {
+    if (from_pack ? (!packed || packed->directory) : h == INVALID_HANDLE_VALUE) {
         if (hos_trace || fs_trace()) hos_log("fs: OpenFile(%s): not found", g);
         RET(R_PATH_NOT_FOUND);
         return;
@@ -396,6 +487,7 @@ HLE(_ZN2nn2fs8OpenFileEPNS0_10FileHandleEPKci) {
     Handle *fh = (Handle *)calloc(1, sizeof *fh);
     fh->h = h;
     fh->writable = want_write;
+    fh->packed = packed;
     snprintf(fh->path, sizeof fh->path, "%s", g);
     G64(ARG(0)) = new_handle(fh);
     if (hos_trace || fs_trace()) hos_log("fs: OpenFile(%s)", g);
@@ -418,7 +510,12 @@ static uint64_t read_at(Ctx *c, uint64_t id, int64_t off, uint64_t buf, uint64_t
         hos_sleep_ns(delay_ns);
     }
     const int away = hos_vcore_away();   /* (as OpenFile: no core held through the read) */
-    while (done < size) {
+    if (fh->packed) {
+        size_t got = 0;
+        romfs_pack_read(&romfs_image.pack, fh->packed, (uint64_t)off, GP(buf), (size_t)size, &got);
+        done = got;
+    }
+    while (!fh->packed && done < size) {
         OVERLAPPED ov = {0};
         int64_t o = off + (int64_t)done;
         ov.Offset = (DWORD)o;
@@ -457,7 +554,9 @@ HLE(_ZN2nn2fs8ReadFileEPmNS0_10FileHandleElPvmRKNS0_10ReadOptionE) {
 /* GetFileSize(long*, FileHandle) */
 HLE(_ZN2nn2fs11GetFileSizeEPlNS0_10FileHandleE) {
     LARGE_INTEGER sz = {0};   /* (hookshot: a folder's handle has no size: 0, not the host stack's bytes) */
-    GetFileSizeEx(get_handle(c, ARG(1))->h, &sz);
+    Handle *fh = get_handle(c, ARG(1));
+    if (fh->packed) sz.QuadPart = (LONGLONG)fh->packed->size;
+    else GetFileSizeEx(fh->h, &sz);
     G64(ARG(0)) = (uint64_t)sz.QuadPart;
     RET(0);
 }
@@ -483,7 +582,7 @@ HLE(_ZN2nn2fs11SetFileSizeENS0_10FileHandleEl) {
 HLE(_ZN2nn2fs9FlushFileENS0_10FileHandleE) { FlushFileBuffers(get_handle(c, ARG(0))->h); RET(0); }
 HLE(_ZN2nn2fs9CloseFileENS0_10FileHandleE) {
     Handle *fh = get_handle(c, ARG(0));
-    CloseHandle(fh->h);
+    if (!fh->packed) CloseHandle(fh->h);
     free_handle(ARG(0));
     free(fh);
 }
@@ -584,8 +683,14 @@ static int is_mod_dir(const char *guest) {
 HLE(_ZN2nn2fs12GetEntryTypeEPNS0_18DirectoryEntryTypeEPKc) {
     char path[HOS_FS_PATH];
     if (!host_path(gstr(ARG(1)), path, sizeof path, NULL)) { RET(R_PATH_NOT_FOUND); return; }
-    hos_blank_cached_icon(gstr(ARG(1)), path);
-    DWORD at = GetFileAttributesA(path);
+    int blanked = hos_blank_cached_icon(gstr(ARG(1)), path);
+    char rel[FS_PATH_MAX];
+    DWORD at;
+    if (pack_path(gstr(ARG(1)), path, rel)) {
+        const RomfsPackEntry *e = romfs_pack_file_find(&romfs_image, rel);
+        at = blanked ? INVALID_FILE_ATTRIBUTES : !rel[0] || (e && e->directory) ? FILE_ATTRIBUTE_DIRECTORY
+             : e ? FILE_ATTRIBUTE_NORMAL : INVALID_FILE_ATTRIBUTES;
+    } else at = GetFileAttributesA(path);
     if (at == INVALID_FILE_ATTRIBUTES && is_mod_dir(gstr(ARG(1)))) at = FILE_ATTRIBUTE_DIRECTORY;   /* (only in mods) */
     if (fs_trace())
         hos_log("fs: GetEntryType(%s): %s", gstr(ARG(1)), at == INVALID_FILE_ATTRIBUTES ? "not found"
@@ -603,20 +708,46 @@ static void add_extra(void *arg, const char *name, int is_dir, uint64_t size) {
     snprintf(e->name, sizeof e->name, "%s", name);
     e->is_dir = is_dir, e->size = size;
 }
+/* The mod walker cannot check an image with GetFileAttributes: filter its entries against the index instead. */
+static void add_pack_extra(void *arg, const char *name, int is_dir, uint64_t size) {
+    Handle *dh = (Handle *)arg;
+    char rel[FS_PATH_MAX];
+    int n = snprintf(rel, sizeof rel, "%s%s%s", dh->path, dh->path[0] ? "/" : "", name);
+    if (n < 0 || (size_t)n >= sizeof rel || romfs_pack_file_find(&romfs_image, rel)) return;
+    add_extra(arg, name, is_dir, size);
+}
 HLE(_ZN2nn2fs13OpenDirectoryEPNS0_15DirectoryHandleEPKci) {
     char path[HOS_FS_PATH], pat[HOS_FS_PATH];
     if (!host_path(gstr(ARG(1)), path, sizeof path, NULL)) { RET(R_PATH_NOT_FOUND); return; }
     snprintf(pat, sizeof pat, "%s\\*", path);
     Handle *dh = (Handle *)calloc(1, sizeof *dh);
     dh->is_dir = (int)ARG(2);   /* mode: 1 directories, 2 files, 3 both */
-    snprintf(dh->path, sizeof dh->path, "%s", pat);   /* (for GetDirectoryEntryCount) */
-    dh->find = FindFirstFileA(pat, &dh->fd);
-    if (dh->find == INVALID_HANDLE_VALUE) dh->find_done = 1;
-    if (rom_rel(gstr(ARG(1)))) hos_mods_dir_extras(rom_rel(gstr(ARG(1))), path, add_extra, dh);
+    char rel[FS_PATH_MAX];
+    int base_exists = 0;
+    dh->packed_directory = pack_path(gstr(ARG(1)), path, rel);
+    if (dh->packed_directory) {
+        snprintf(dh->path, sizeof dh->path, "%s", rel);
+        dh->find = INVALID_HANDLE_VALUE;
+        base_exists = romfs_pack_file_dir_open(&romfs_image, rel, &dh->pack_dir);
+        if (!base_exists) {
+            size_t length = strlen(rel);
+            memcpy(dh->pack_dir.prefix, rel, length);
+            if (length) dh->pack_dir.prefix[length++] = '/';
+            dh->pack_dir.prefix_length = length;
+            dh->pack_dir.cursor = romfs_image.pack.count;
+            dh->find_done = 1;
+        }
+        hos_mods_dir_extras(rel, "<", add_pack_extra, dh);
+    } else {
+        snprintf(dh->path, sizeof dh->path, "%s", pat);   /* (for GetDirectoryEntryCount) */
+        dh->find = FindFirstFileA(pat, &dh->fd);
+        if (dh->find == INVALID_HANDLE_VALUE) dh->find_done = 1;
+        if (rom_rel(gstr(ARG(1)))) hos_mods_dir_extras(rom_rel(gstr(ARG(1))), path, add_extra, dh);
+    }
     if (fs_trace())
         hos_log("fs: OpenDirectory(%s, mode %d)%s, %d entries from mods", gstr(ARG(1)), (int)ARG(2),
                 dh->find == INVALID_HANDLE_VALUE ? ": not found" : "", dh->nextras);
-    if (dh->find == INVALID_HANDLE_VALUE && !dh->nextras) { free(dh); RET(R_PATH_NOT_FOUND); return; }
+    if (!base_exists && dh->find == INVALID_HANDLE_VALUE && !dh->nextras) { free(dh); RET(R_PATH_NOT_FOUND); return; }
     G64(ARG(0)) = new_handle(dh);
     RET(0);
 }
@@ -628,7 +759,23 @@ HLE(_ZN2nn2fs13ReadDirectoryEPlPNS0_14DirectoryEntryENS0_15DirectoryHandleEl) {
     AcquireSRWLockExclusive(&dir_lock);
     Handle *dh = get_handle(c, ARG(2));
     int64_t n = 0, max = (int64_t)ARG(3);
-    while (n < max && !dh->find_done) {
+    if (dh->packed_directory && (max < 0 || (uint64_t)max > UINT64_MAX / 0x310 ||
+        (max && !hos_guest_range(ARG(1), (uint64_t)max * 0x310)))) {
+        G64(ARG(0)) = 0; RET(0x2EE202); return;
+    }
+    while (n < max && dh->packed_directory && !dh->find_done) {
+        const unsigned char *name;
+        size_t length;
+        const RomfsPackEntry *entry = romfs_pack_dir_next(&romfs_image.pack, &dh->pack_dir,
+                                                        (unsigned)dh->is_dir, &name, &length);
+        if (!entry) { dh->find_done = 1; break; }
+        uint64_t e = ARG(1) + 0x310 * n++;
+        memset(GP(e), 0, 0x310);
+        memcpy(GP(e), name, length);
+        *(uint8_t *)GP(e + 0x304) = entry->directory ? 0 : 1;
+        G64(e + 0x308) = entry->size;
+    }
+    while (n < max && !dh->packed_directory && !dh->find_done) {
         WIN32_FIND_DATAA *fd = &dh->fd;
         int isdir = (fd->dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
         int want = (isdir && (dh->is_dir & 1)) || (!isdir && (dh->is_dir & 2));
@@ -662,7 +809,9 @@ HLE(_ZN2nn2fs22GetDirectoryEntryCountEPlNS0_15DirectoryHandleE) {
     Handle *dh = get_handle(c, ARG(1));
     int64_t n = 0;
     WIN32_FIND_DATAA fd;
-    HANDLE f = dh->path[0] ? FindFirstFileA(dh->path, &fd) : INVALID_HANDLE_VALUE;
+    HANDLE f = !dh->packed_directory && dh->path[0] ? FindFirstFileA(dh->path, &fd) : INVALID_HANDLE_VALUE;
+    if (dh->packed_directory)
+        n = romfs_pack_dir_count(&romfs_image.pack, &dh->pack_dir, (unsigned)dh->is_dir);
     if (f != INVALID_HANDLE_VALUE) {
         do {
             int isdir = (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
