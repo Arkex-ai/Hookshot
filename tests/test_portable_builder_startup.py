@@ -25,7 +25,8 @@ def main():
         home = root / "Original ü, volume/HookshotBuilder"
         app = home / "versions/v-authored/HookshotBuilder"
         published = root / "published"
-        subprocess.run([args.dotnet, "publish", str(project / "HookshotBuilder.csproj"), "--configuration", "Debug",
+        # Exercise the shipped self-contained package, not a Debug app that depends on an installed Desktop runtime.
+        subprocess.run([args.dotnet, "publish", str(project / "HookshotBuilder.csproj"), "--configuration", "Release",
                         "-p:NuGetAudit=false", "--output", str(published), "--disable-build-servers", "-v", "quiet"], check=True)
         shutil.copytree(published, app)
         marker = home / ".hookshot-portable"
@@ -34,6 +35,14 @@ def main():
         script.parent.mkdir(parents=True)
         script.write_text('import os,json\nprint(json.dumps({"home":os.environ.get("HOOKSHOT_SETUP_BASE"),"portable":os.environ.get("HOOKSHOT_BUILDER_PORTABLE")}))\n', encoding="utf-8")
         env = {k: v for k, v in os.environ.items() if k.upper() not in ("HOOKSHOT_SETUP_BASE", "HOOKSHOT_BUILDER_PORTABLE")}
+        # A portable installation must start on a PC without .NET. Scope discovery to an owned empty folder;
+        # publishing above still uses the SDK, while the actual app must use its packaged runtime below.
+        runtime_root = root / "no-installed-runtime"
+        runtime_root.mkdir()
+        env.update(DOTNET_ROOT=str(runtime_root), DOTNET_ROOT_X64=str(runtime_root), DOTNET_MULTILEVEL_LOOKUP="0")
+        runtime = json.loads((app / "HookshotBuilder.runtimeconfig.json").read_text(encoding="utf-8"))["runtimeOptions"]
+        assert "includedFrameworks" in runtime and "framework" not in runtime and "frameworks" not in runtime
+        assert (app / "coreclr.dll").is_file() and (app / "PresentationFramework.dll").is_file()
         # The authored tools fixture uses the trusted interpreter running this check, not another PATH entry.
         env["PATH"] = str(Path(os.sys.executable).parent) + os.pathsep + env.get("PATH", "")
         def run(overrides, valid):
