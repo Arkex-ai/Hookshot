@@ -109,19 +109,20 @@ def say(*words):
 def check_writable(out):
     """The game folder must take new files before anything is read into it. A folder under Program Files (or another protected
     place) only takes them with administrator rights, and the build used to stop minutes later inside nup.py with a bare
-    "PermissionError: [WinError 5]" on its .game folder"""
+    "PermissionError: [WinError 5]" on its .game folder. A write refused another way (#2792: a FileNotFoundError in a folder
+    just made) gets the same plain reason"""
     probe = os.path.join(out, ".hookshot_write_check")
     try:
         os.makedirs(out, exist_ok=True)
         with open(probe, "w") as f:
             f.write("ok")
         os.remove(probe)
-    except PermissionError as e:
+    except OSError as e:
         protected = [os.environ.get(k) for k in ("ProgramFiles", "ProgramFiles(x86)", "ProgramW6432", "SystemRoot")]
         inside = any(d and os.path.normcase(os.path.abspath(out)).startswith(os.path.normcase(os.path.abspath(d)) + os.sep)
                      for d in protected)
         where = (" Windows protects folders under Program Files and Windows, and only lets administrators write there."
-                 if inside else "")
+                 if inside and isinstance(e, PermissionError) else "")
         example = "~/Games/Hookshot" if LINUX else r"C:\Games\Hookshot"
         fail("The game folder %s can't be written to (%s).%s In Hookshot Builder, choose a game folder of your own, for example "
              "%s, and build again." % (out, e.strerror or e, where, example))
@@ -1663,7 +1664,16 @@ def keep_translation(work, key):
         return None
 
 
-def forget_failed_build(work, linked):
+def generated_names(work):
+    """The names of the files the lift and build.py write and compile (sa/gen, the runtime in sa/build/rt64, sa/build/gen)"""
+    names = set()
+    for d in (os.path.join(work, "sa", "gen"), os.path.join(work, "sa", "build", "rt64"), os.path.join(work, "sa", "build", "gen")):
+        with contextlib.suppress(OSError):
+            names.update(os.listdir(d))
+    return names
+
+
+def forget_failed_build(work, linked, failed=()):
     """(hookshot) After a compile or link that failed. It forgets the lift: the next build translates the game again. A lifted file
     cut short (an antivirus, a full disk, a stopped run: "g_module_b" for g_module_base, issue 1197) or lifted C another builder
     left (20 undefined game functions at the link, issue 1176) otherwise failed the same way at every try, the key still matching.
@@ -1671,7 +1681,17 @@ def forget_failed_build(work, linked):
     from another version linked with every object "compiled in 0s" and a64_dirty, a64_icall, a64_lookup, recomp_cntpct undefined,
     at every try (issue 1197, Linux, v2.0.10). A compile that failed or was stopped (a compiler out of memory twice, the build
     closed or killed) never linked: the objects it finished are kept (each is cached only once its compiler succeeded, named by
-    its source, flags and headers), so the next try compiles only the rest, not up to an hour again on a small PC"""
+    its source, flags and headers), so the next try compiles only the rest, not up to an hour again on a small PC.
+    failed: the files build.py could not compile, alone too (its "FAILED <name>" lines). When every one is a source of the
+    repository (host/, gpu/, third_party/), none the lift's or build.py's own, the translation is not what failed: it is kept, and
+    the next build compiles the files not compiled yet without translating the game again (a typo in a host file cost a whole
+    lift, ~5 minutes on Windows). A build stopped without such a line, or one with a generated file among them, forgets it as before"""
+    if not linked and failed:
+        generated = generated_names(work)
+        if not any(name.startswith("code_") or name in generated for name in failed):
+            print("the build failed in %s, not in the translated game: the next one keeps the translation and compiles only the "
+                  "files not compiled yet" % ", ".join(sorted(failed)[:6]), flush=True)
+            return
     key_file = os.path.join(work, "sa", "gen", LIFT_KEY)
     if os.path.exists(key_file):
         os.remove(key_file)
@@ -2243,10 +2263,14 @@ def main(a=None):
             if len(parts) == 3 and parts[1].isdigit() and parts[2].isdigit():
                 plan[:] = [int(parts[1]), int(parts[2])]
     linking = []   # (build.py's "compiled in Ns, 0 failed": every object made, the link next)
+    failed = []   # (build.py's "FAILED <name> (...": a file that did not compile, alone either)
 
     def compile_line(line):
         if re.match(r"compiled in \d+s, 0 failed$", line):
             linking.append(line)
+        m = re.match(r"FAILED (\S+) \(", line)
+        if m:
+            failed.append(m.group(1))
         compiled(line)
     try:
         if run(PY + ["nx2/build.py", "--standalone", "--jobs", str(a.jobs)] + kept_lift, env, compile_line,
@@ -2261,7 +2285,7 @@ def main(a=None):
             done["n"] = 0.0
             run(PY + ["nx2/build.py", "--standalone", "--jobs", str(a.jobs)], env, compile_line)
     except SystemExit:
-        forget_failed_build(work, bool(linking))
+        forget_failed_build(work, bool(linking), failed)
         raise
     compile_seconds = time.time() - compile_started
 

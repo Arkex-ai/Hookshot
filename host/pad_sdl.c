@@ -374,8 +374,7 @@ static void pads_poll(void) {
                 pads[slot].vendor = hos_sdl_pad_vendor(gc);
                 pads[slot].steam = hos_sdl_pad_steam_handle(gc);
                 pads[slot].motion_only = 0;   /* (the poll below decides, and says so) */
-                hos_log("hid: controller \"%s\" connected (SDL)%s%s", hos_sdl_pad_name(gc),
-                        pads[slot].motion ? ", with a gyroscope" : "", pads[slot].steam ? ", Steam Input's" : "");
+                hos_sdl_pad_log_connection(gc, pads[slot].motion, pads[slot].steam != 0);
             }
         }
         uint64_t b = 0;
