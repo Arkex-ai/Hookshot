@@ -148,6 +148,9 @@ case-sensitive, and an unknown one is ignored.
 
 ### The GPU
 
+Pipeline-cache file ownership, temporary storage and failure behavior are described in
+[pipeline cache storage](pipeline-cache-storage.md).
+
 | Switch | What it does |
 |---|---|
 | `RX_VK_VALIDATION` (set) | The Khronos validation layer |

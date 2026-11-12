@@ -52,6 +52,8 @@ Agents may add and re-score rows; a person reviews the change like any other PR.
 | 0.11 | Crash at the door after the owl intro (Navi wakes Link, 2.0.13): access violation in `igvk64.dll` at start-up; GPU: Intel UHD Graphics (i3-1115G4, 128 MB shared, no mesh shaders: the best-effort fallback, #1001); reach is Intel's 3.5% | S0 | 0.035 | 0.4 | | #bug-reporting "2.0.13 Crash after you see the owl during intro cutscene" (5 logs) |
 | 0.04 | FSR 4 ticked in the Builder after the game was built does not rebuild it (the Builder says up to date); FSR 4 DLLs added by hand get no AMD license prompt, as expected. Open: #2591 | S3 | 0.10 (RX 9000) | 0.4 |  | #2511; #bug-reporting "Not Getting AMD License Agreement Message" |
 
+| 0.01 (provisional) | Pipeline cache persistence holds a complete temporary heap copy on top of the driver cache. Preserve the warm cache with file-backed storage; measured preparation memory, no crash/FPS fix claimed. Reach is an unmeasured 1% planning assumption for large-cache installations | S3 | 0.01 | 1.0 | Arkex-ai | #2623; [claim](https://discord.com/channels/1568810484818378804/1570103281856806962/1570255465806565520); native Windows/Linux file tests and Windows preparation/checkpoint reload |
+
 ## Fixed, waiting for a release
 
 | Problem | Fixed by | Notes |
