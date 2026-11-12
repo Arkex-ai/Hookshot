@@ -113,13 +113,13 @@ suites had the same failures on the candidate and its exact base `ef81aee7`: Lin
 Windows 442/4/33 versus 435/4/33 (passed/failed/skipped). These are not all-green full-suite results.
 Linux source tests do not prove Linux gameplay. The Windows runs cover early gameplay and menus, not the
 campaign, deterministic frame equivalence, loading speed or memory savings. The host font callback uses renderer
-interface version21, appending after main's version20 screen-size callback. No image/index/game-derived fixture is shipped.
+interface version22, appending after main's version20 screen-size callback. No image/index/game-derived fixture is shipped.
 
 The host selects the virtual font callback only when a packed image is open, before initializing the renderer.
 Folder installations keep the original direct-file Reader path, including its input-size behavior. The 64 MiB
 compressed-asset limit applies only to the packed virtual reader; its decoded-size limit remains 256 MiB.
 Neither the Builder nor launcher selects packed mode automatically. Acceptance of this optional CLI capability
-remains a maintainer decision on #1007. Main now uses API20; this proposal uses API21. Later interface changes must rebase and bump again.
+remains a maintainer decision on #1007. Main now uses API21 (including the program-created callback); this proposal uses API22. Later interface changes must rebase and bump again.
 
 
 Review validation on main `51da0464`, source `329b2a93`: twelve focused checks pass on each OS. The actual renderer
