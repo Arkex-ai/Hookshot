@@ -761,6 +761,7 @@ HLE(_ZN2nn2fs13ReadDirectoryEPlPNS0_14DirectoryEntryENS0_15DirectoryHandleEl) {
     int64_t n = 0, max = (int64_t)ARG(3);
     if (dh->packed_directory && (max < 0 || (uint64_t)max > UINT64_MAX / 0x310 ||
         (max && !hos_guest_range(ARG(1), (uint64_t)max * 0x310)))) {
+        ReleaseSRWLockExclusive(&dir_lock);
         G64(ARG(0)) = 0; RET(0x2EE202); return;
     }
     while (n < max && dh->packed_directory && !dh->find_done) {

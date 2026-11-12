@@ -100,6 +100,9 @@ def main():
         print(result.stdout.strip())
         if args.mutations:
             edits = [('loose-fallback', '!want_write && pack_path(g, path, rel)', '0'),
+                     ('directory-error-unlock',
+                      'ReleaseSRWLockExclusive(&dir_lock);\n        G64(ARG(0)) = 0; RET(0x2EE202); return;',
+                      'G64(ARG(0)) = 0; RET(0x2EE202); return;'),
                      ('actual-written-count', 'done = got;', 'done = size;'),
                      ('read-only-mount', 'if (want_write && !writable)', 'if (0)'),
                      ('directory-source', 'dh->packed_directory = pack_path(gstr(ARG(1)), path, rel);', 'dh->packed_directory = 0;'),

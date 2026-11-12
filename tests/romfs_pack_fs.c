@@ -192,6 +192,8 @@ static int test_main(int argc, char **argv) {
     h = open_directory("rom:/", 3, &result);
     CHECK(result == 0 && count_directory(h) == 6);
     CHECK(read_directory(h, 0xfffc, 1, &result) == 0 && result == 0x2EE202);
+    CHECK(TryAcquireSRWLockExclusive(&dir_lock));
+    ReleaseSRWLockExclusive(&dir_lock);
     CHECK(read_directory(h, 0x2000, UINT64_MAX, &result) == 0 && result == 0x2EE202);
     CHECK(read_directory(h, UINT64_MAX, 0, &result) == 0 && result == 0);
     CHECK(count_directory(h) == 6);
