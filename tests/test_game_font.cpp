@@ -4,6 +4,7 @@
 // for, a wrong size word, a wrong font tag and a font with no Latin letters (argv[3]: only a Hebrew letter) give nothing.
 #include "../gpu/vk/vk_game_font.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -90,6 +91,20 @@ static int authored_asset(const char *name, uint64_t offset, void *out, uint64_t
     return 1;
 }
 
+namespace script_caller {
+namespace game_font = mkwvk::game_font;
+struct ScriptFonts { const char* lang; const char* game[2]; const char* system[1]; };
+constexpr ScriptFonts kScriptFonts[] = {{"authored-script", {"Fallback", nullptr}, {nullptr}}};
+struct Host { Reader::ReadAsset romfs_read = authored_asset; } provider;
+Host* host = &provider;
+std::vector<Bytes> merged;
+std::string romfs_dir() { return {}; } // No loose source and no system-font fallback.
+std::string expand(const char* path) { return path; }
+void merge(Bytes bytes, const char*) { merged.push_back(std::move(bytes)); }
+template<class... Args> void logf(const char*, Args...) {}
+#include "script_font_caller.inc"
+}
+
 int main(int argc, char** argv) {
     if (argc < 4) return 2;
     const fs::path root = argv[1];
@@ -167,6 +182,13 @@ int main(int argc, char** argv) {
         CHECK("loose script source opens", loose.open(asset_root));
         CHECK("loose script font still loads", loose.read_script("Test") == hebrew);
         CHECK("loose TrueType suffix still loads", loose.read_script("Fallback") == hebrew);
+        script_caller::script_fonts("en");
+        CHECK("English does not merge script fonts", script_caller::merged.empty());
+        script_caller::script_fonts("authored-script");
+        CHECK("translated-menu caller loads the virtual script font",
+              script_caller::merged.size() == 1 && script_caller::merged[0] == hebrew);
+        script_caller::script_fonts("authored-script");
+        CHECK("translated-menu caller merges its script only once", script_caller::merged.size() == 1);
     }
     // ---- the archive: a truncated frame, a name offset past it, a longer name that starts the same ----
     {

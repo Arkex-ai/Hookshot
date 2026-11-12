@@ -57,6 +57,7 @@ def font(*codepoints):
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--cxx", default="g++")
+    p.add_argument("--caller-source", type=Path, default=ROOT / "gpu/vk/vk_imgui.cpp")
     a = p.parse_args()
     # (the C compiler beside the C++ one: g++ -> gcc, clang++ -> clang, x86_64-...-g++ -> x86_64-...-gcc)
     tool = Path(a.cxx)
@@ -71,6 +72,17 @@ def main():
     flags = ["-O1", "-DZSTD_DISABLE_ASM", "-DZSTD_LEGACY_SUPPORT=0", "-DZSTD_MULTITHREAD=0", "-I" + str(ZSTD),
              "-I" + str(ROOT / "third_party/imgui")]
     with tempfile.TemporaryDirectory(prefix="game-font-") as tmp:
+        # Compile the actual translated-menu caller too: exercising Reader alone
+        # cannot catch a second caller that forgets to pass its virtual source.
+        caller = a.caller_source.read_text(encoding="utf-8")
+        start = caller.index("void script_fonts(")
+        end = caller.index("{", start) + 1
+        depth = 1
+        while depth:
+            depth += (caller[end] == "{") - (caller[end] == "}")
+            end += 1
+        (Path(tmp) / "script_font_caller.inc").write_text(caller[start:end], encoding="utf-8")
+        flags += ["-I" + tmp]
         objs = []
         for i, f in enumerate(SOURCES):
             o = Path(tmp) / ("z%d.o" % i)

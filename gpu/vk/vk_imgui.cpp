@@ -161,7 +161,7 @@ void script_fonts(const char* lang) {
         std::string merged;
         static game_font::Reader reader;
         static bool opened = false, open = false;
-        if (!opened) opened = true, open = reader.open(romfs_dir());
+        if (!opened) opened = true, open = reader.open(romfs_dir(), host ? host->romfs_read : nullptr);
         for (const char* g : f.game)
             if (g && open) {
                 std::vector<unsigned char> b = reader.read_script(g);
