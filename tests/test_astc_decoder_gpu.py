@@ -54,6 +54,10 @@ def main():
         directory = Path(directory)
         executable = directory / ("fixture.exe" if os.name == "nt" else "fixture")
         flags = ["-std=c++20", "-O1", "-Wall", "-Wextra", "-Werror", "-Wno-missing-field-initializers"]
+        if os.name == "nt":
+            # CI's clang can use MSVC headers: keep the standard, portable fopen API,
+            # as the existing native-font fixtures do, without disabling warnings.
+            flags.append("-D_CRT_SECURE_NO_WARNINGS")
         libraries = [] if os.name == "nt" else ["-ldl"]
         subprocess.run([compiler, *flags, "-I" + str(args.headers), str(ROOT / "tests/astc_decoder_gpu.cpp"),
                         "-o", str(executable), *libraries], check=True, timeout=120, env=env)
