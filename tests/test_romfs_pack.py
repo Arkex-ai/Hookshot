@@ -45,7 +45,9 @@ class PackTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix='authored-romfs-')
         self.addCleanup(self.temporary.cleanup)
-        self.root = Path(self.temporary.name)
+        # pack() canonicalizes its input; Windows TEMP may use an 8.3 alias.
+        # Match that path before installing lstat fault injection by identity.
+        self.root = Path(self.temporary.name).resolve()
         self.source = self.root / 'source'
         self.source.mkdir()
         self.target = self.root / 'assets.pack'
@@ -140,6 +142,7 @@ class PackTests(unittest.TestCase):
         self.target.write_bytes(b'previous output')
         with mock.patch.object(Path, 'lstat', observed), self.assertRaises(ValueError):
             packer.pack(self.source, self.target, replace=True)
+        self.assertGreaterEqual(visits, 2)
         self.assertEqual(self.target.read_bytes(), b'previous output')
         self.assert_no_partial()
 
