@@ -28,11 +28,14 @@ PREFIX = r'''
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <cstddef>
 #include "gpu/vk/vk_api.h"
 using DWORD = unsigned long;
 using HMODULE = void*;
 constexpr unsigned MAX_PATH = 260;
-static MkwVkHost vk_host{};
+static int host_screen_size(int* width, int* height) { *width=3440; *height=1440; return 1; }
+// ACTUAL_HOST_INITIALIZER
+static_assert(offsetof(MkwVkHost, romfs_read) == offsetof(MkwVkHost, screen_size) + sizeof(MkwVkHost::screen_size));
 static HMODULE vk_module;
 static int packed, init_calls;
 static const MkwVkHost* received;
@@ -59,6 +62,8 @@ int main() {
         if (!load_vulkan("authored.dll") || !received || init_calls != packed + 1 ||
             vk_module != reinterpret_cast<void*>(1)) return 2;
         const auto expected = packed ? hos_fs_romfs_read : nullptr;
+        int width=0, height=0;
+        if (!received->screen_size || !received->screen_size(&width,&height) || width!=3440 || height!=1440) return 4;
         if (received->romfs_read != expected) {
             std::fprintf(stderr, "font source mismatch: packed=%d\n", packed); return 3;
         }
@@ -71,13 +76,25 @@ int main() {
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cxx", default="clang++")
+    parser.add_argument("--backend-source", type=Path, default=ROOT / "host/rx_backend.c")
     args = parser.parse_args()
-    body = function((ROOT / "host/rx_backend.c").read_text(encoding="utf-8"),
+    source = args.backend_source.read_text(encoding="utf-8")
+    body = function(source,
                     "static const MkwVkRenderer *load_vulkan(")
+    # Compile the actual initializer's slot order. Unrelated providers are null,
+    # while screen_size remains typed and must survive font selection unchanged.
+    import re
+    initializer = function(source, "static MkwVkHost vk_host =") + ";"
+    initializer = re.sub(r"/\*.*?\*/", "", initializer, flags=re.S)
+    start = initializer.index("{")
+    initializer = initializer[:start] + re.sub(r"\b[A-Za-z_]\w*\b",
+        lambda m: m[0] if m[0] in ("MKWVK_API_VERSION", "host_screen_size") else "nullptr",
+        initializer[start:])
+    prefix = PREFIX.replace("// ACTUAL_HOST_INITIALIZER", initializer)
     with tempfile.TemporaryDirectory(prefix="romfs-font-backend-") as directory:
         source = Path(directory) / "caller.cpp"
         executable = Path(directory) / ("caller.exe" if os.name == "nt" else "caller")
-        source.write_text(PREFIX + body + MAIN, encoding="utf-8")
+        source.write_text(prefix + body + MAIN, encoding="utf-8")
         subprocess.run([args.cxx, "-std=c++20", "-Wall", "-Wextra", "-Werror",
                         "-I" + str(ROOT), str(source), "-o", str(executable)],
                        check=True, timeout=60)
