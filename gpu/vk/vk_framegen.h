@@ -6,6 +6,8 @@
 namespace mkwvk {
 
 bool framegen_on();
+/// Release unused size-dependent images after Off; caller holds replay_mu before recording.
+void framegen_idle();
 /// Records the frame's processing into the present's recording (src: the window texture's view, sw x sh, the crop
 /// x, y, w, h); false when interpolation cannot run (the present goes to the window as without it)
 bool framegen_record(VkCommandBuffer cmd, VkImageView src, uint32_t sw, uint32_t sh, const int crop[4]);

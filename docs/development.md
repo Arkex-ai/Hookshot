@@ -184,6 +184,18 @@ case-sensitive, and an unknown one is ignored.
 | `RX_VK_FIFO=1`, `RX_VK_IMMEDIATE=1` | V-Sync On (FIFO) or Off (immediate) for one run, over the menu's V-Sync row |
 | `HOS_VCORES=0`, `HOS_CORES=<1..8>`, `HOS_RESERVE_CORE=0` | No virtual cores; the cores the game sees (6); no core kept for the replay (one is, with 8 or more logical processors) |
 
+#### Frame-generation images while Off
+
+After frame generation stays disabled for 120 presents, its size-dependent
+input, luma, flow and output-set images can be released. The cooldown is only
+a cache policy: the collector first requires no queued or displayed set and
+then uses the existing device-idle barrier under the presentation mutex.
+Collection runs under the replay lock before the next present is recorded.
+This one-time barrier can affect the transition; it is not a frame-rate gain.
+Pipeline setup stays cached and re-enabling generation recreates the images.
+`tests/test_framegen_idle.py` checks the production lifetime helpers, including
+pending display jobs, GPU-drain ordering, re-enable and the present-side call.
+
 ### Building
 
 A build reads and writes tens of gigabytes. When the game folder or the build files folder is on a hard drive,

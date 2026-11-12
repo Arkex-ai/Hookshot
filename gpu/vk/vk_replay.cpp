@@ -3396,6 +3396,7 @@ void do_present(const nvn_tex* t, const int crop[4]) {
         present_value = 0;
         rec_value_now = value;
         ub_first_of_recording = ub_updates.size();
+        framegen_idle();   // No current present has recorded references to interpolation images yet.
         Recording& r = begin_recording(value);
         memory_begin_submission();
         Texture* tex = t ? texture_for_present(t) : nullptr;

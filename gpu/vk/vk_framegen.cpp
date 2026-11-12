@@ -83,6 +83,7 @@ struct State {
     bool init = false;
     std::atomic<bool> failed{false};   // also read by Reflex's game-thread eligibility check
     uint32_t w = 0, h = 0;
+    uint64_t idle_frame = 0;   // Cooldown only; GPU safety comes from the explicit queue/device drain.
     Pipe copy, luma, flow, median, synth;
     VkSampler nearest = VK_NULL_HANDLE, linear = VK_NULL_HANDLE;
     Img frames[2], lumas[2], flows[2];
@@ -523,6 +524,34 @@ bool framegen_wanted(int menu_value, int allow) {
 bool framegen_on() {
     static const int allow = !getenv("RX_VK_FRAMEGEN") || atoi(getenv("RX_VK_FRAMEGEN")) != 0;
     return framegen_wanted(opts.framegen, allow) && !dev.offscreen && !fg.failed;
+}
+
+void framegen_idle() {
+    // Called under replay_mu, before recording a present can refer to these images.
+    if (framegen_on() || !fg.w) {
+        fg.idle_frame = 0;
+        return;
+    }
+    const uint64_t now = texture_frame_no();
+    if (!fg.idle_frame || now < fg.idle_frame) {
+        fg.idle_frame = now;
+        return;
+    }
+    if (now - fg.idle_frame <= 120) return;
+    {
+        std::lock_guard lk(fg.mu);
+        if (!fg.jobs.empty() || std::any_of(std::begin(fg.sets), std::end(fg.sets),
+                                          [](const OutSet& s) { return s.busy; })) return;
+    }
+    // A finished display job may still have GPU work in flight. Use the same
+    // barrier as ensure_size(), not the CPU-frame cooldown or replay timeline.
+    {
+        std::lock_guard qk(dev.present_mu);
+        device_wait_idle_locked();
+    }
+    drop_size();
+    fg.idle_frame = 0;
+    logf("vk: frame interpolation: released idle images after frame generation was turned off");
 }
 
 // Ultrawide's menus (the Insert menu's Ultrawide menus): which of nx2/oot_wide.py's keep-list screens keep the whole picture, told
