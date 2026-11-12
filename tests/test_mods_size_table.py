@@ -190,6 +190,7 @@ def routing_checks(cc, tmp, zstandard, host):
     for f in ("mods.c", "prompts.c"):   # (beside a hos.h of the test's: hos_log, and what the live prompts read: none here)
         (src / f).write_bytes((host / f).read_bytes())
     (src / "hos.h").write_text("#pragma once\n#include <stddef.h>\n#include <stdint.h>\nvoid hos_log(const char *f, ...);\n"
+                               "int hos_fs_packed(void);\nint hos_fs_packed_find(const char *, const char *, char *, size_t);\n"
                                "#define HOS_WRITTEN(p, n) ((void)0)\n"
                                "static inline void *hos_guest_range(uint64_t a, uint64_t n) { (void)a; (void)n; return NULL; }\n"
                                "int hos_regions(uint64_t (*out)[2], int cap);\nint64_t hos_now_ns(void);\n")
@@ -224,6 +225,8 @@ void hos_log(const char *f, ...) { va_list ap; va_start(ap, f); printf("log: ");
 int hos_binding(int set, int button, int slot) { (void)set; (void)button; (void)slot; return -1; }
 int hos_sdl_pads(uint64_t *buttons, int32_t stick[4]) { (void)buttons; (void)stick; return 0; }
 int hos_xinput_pads(void) { return 0; } /* no controllers in this routing fixture */
+int hos_fs_packed(void) { return 0; } /* this routing fixture uses a loose base */
+int hos_fs_packed_find(const char *p, const char *s, char *out, size_t cap) { (void)p; (void)s; (void)out; (void)cap; return 0; }
 void hos_sdl_pad_first_name(char *out, size_t cap) { if (cap) *out = 0; }
 int hos_regions(uint64_t (*out)[2], int cap) { (void)out; (void)cap; return 0; }
 int64_t hos_now_ns(void) { return 0; }

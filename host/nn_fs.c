@@ -86,6 +86,25 @@ const char *hos_romfs_dir, *hos_user_dir;
 static RomfsPackFile romfs_image;
 static void close_romfs_image(void) { romfs_pack_file_close(&romfs_image); }
 int hos_fs_packed(void) { return romfs_image.pack.read != NULL; }
+/* First file by name in the immutable base index, not mods or a stale loose root.
+   prefix ends at the filename prefix; a match cannot cross another directory. */
+int hos_fs_packed_find(const char *prefix, const char *suffix, char *out, size_t cap) {
+    if (!hos_fs_packed() || !prefix || !suffix || !out || !cap) return 0;
+    const size_t pn = strlen(prefix), sn = strlen(suffix);
+    const RomfsPack *p = &romfs_image.pack;
+    for (uint32_t i = romfs_pack_lower(p, (const unsigned char *)prefix, pn); i < p->count; i++) {
+        const RomfsPackEntry *e = p->entries + i;
+        const unsigned char *name = p->index + e->name;
+        if (e->length < pn || memcmp(name, prefix, pn)) break;
+        if (e->directory || e->length < pn + sn || memchr(name + pn, '/', e->length - pn) ||
+            memcmp(name + e->length - sn, suffix, sn)) continue;
+        if (e->length >= cap) return 0;
+        memcpy(out, name, e->length);
+        out[e->length] = 0;
+        return 1;
+    }
+    return 0;
+}
 /* Called once at startup, before guest threads; the image lives until process teardown. */
 int hos_fs_pack_open(const char *path) {
     if (!path) return 1;

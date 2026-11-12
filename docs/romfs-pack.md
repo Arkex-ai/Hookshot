@@ -132,3 +132,7 @@ Generation reuses verified `23c50087` output: all existing nx2 generator modules
 standalone packer added. Prompt assets are regenerated from this source. Full suites: Windows465/3/35 (the same
 three exact-main failures); Linux478/1/24, failing the unchanged control fixture's newest-save ordering assertion.
 The original failed run is retained; these are not full-green local suites. Hosted CI is recorded in the PR.
+
+## Prompt resource-table discovery
+
+After main added exact game-table selection for prompt/mod merging, packed mode discovers the first matching base file by name in the immutable image index. It ignores directories, nested files and stale loose roots, and refuses an undersized output buffer. Folder mode retains the existing directory enumeration. This preserves main's first-by-name rule before selecting the matching mod table; it does not introduce a new version-selection rule. The game-free regression runs the actual prompt discovery and complete filesystem backend against authored folders/images, including an image-only root; the old folder-only caller fails the stale-root assertion. No new gameplay or performance result is claimed.

@@ -148,6 +148,7 @@ void hos_thread_wake(HosThread *t);
 int hos_fs_host_path(const char *guest, char *out, size_t cap);
 int hos_fs_pack_open(const char *path);   /* optional read-only image, selected once before guest threads */
 int hos_fs_packed(void);   /* immutable startup choice; native assets use their legacy path in folder mode */
+int hos_fs_packed_find(const char *prefix, const char *suffix, char *out, size_t cap);
 int hos_fs_romfs_read(const char *rel, uint64_t offset, void *out, uint64_t size, uint64_t *length);
 void hos_event_signal(uint64_t guest_event);
 

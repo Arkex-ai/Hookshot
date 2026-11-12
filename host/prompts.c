@@ -1319,6 +1319,8 @@ static int layout_runs(const char *dir, int face, const int *bind, Layout *o) {
 /* The game's table name, as nx2/prompt_assets.py selects it for the prompts. A mod can
    include other versions' tables too; those must not seed the one-time merge. */
 static int game_table(char *out, size_t cap) {
+    if (hos_fs_packed())
+        return hos_fs_packed_find("System/Resource/ResourceSizeTable.", ".rsizetable.zs", out, cap);
     char pattern[MAX_PATH], name[MAX_PATH] = "";
     if (!hos_romfs_dir) return 0;
     snprintf(pattern, sizeof pattern, "%s/System/Resource/ResourceSizeTable.*.rsizetable.zs", hos_romfs_dir);
