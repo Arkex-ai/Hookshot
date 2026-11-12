@@ -25,7 +25,7 @@ uint64_t hos_heap_size, hos_heap_used, hos_total_memory, hos_program_size;
 static uint64_t sys_next = HOS_SYSTEM_BASE;
 
 /* Address regions are handed out top-down from HOS_SPACE_END; the heap grows up from HOS_HEAP_BASE. */
-typedef struct { uint64_t addr, size; } Range;
+typedef struct { uint64_t addr, size; int releasing; } Range;
 static Range *regions;
 static int nregions, capregions;
 static uint64_t region_floor = ~0ULL;   /* the lowest region (none yet: the window's end) */
@@ -55,7 +55,12 @@ void hos_mem_init(uint64_t image_end) {
 #endif
 }
 
-uint64_t hos_region_floor(void) { return region_floor; }
+uint64_t hos_region_floor(void) {
+    LOCK();
+    const uint64_t floor = region_floor;
+    UNLOCK();
+    return floor;
+}
 
 /* (hookshot, the control bridge: host/control.c) Whether [addr, addr + size) is wholly inside memory the runtime has
    mapped for the game: the image, the system region in use (our own objects), the heap, or an address region. A read or
@@ -71,7 +76,7 @@ int hos_mem_region(uint64_t addr, uint64_t size) {
     else if (addr >= HOS_HEAP_BASE && end <= HOS_HEAP_BASE + hos_heap_size) cls = HOS_MEM_HEAP;
     else
         for (int i = 0; i < nregions && !cls; i++)
-            if (addr >= regions[i].addr && end <= regions[i].addr + regions[i].size) cls = HOS_MEM_REGION;
+            if (!regions[i].releasing && addr >= regions[i].addr && end <= regions[i].addr + regions[i].size) cls = HOS_MEM_REGION;
     UNLOCK();
     return cls;
 }
@@ -129,6 +134,7 @@ uint64_t hos_region_alloc(uint64_t size, uint64_t align) {
         memmove(&regions[at + 1], &regions[at], (nregions - at) * sizeof(Range));
         regions[at].addr = found;
         regions[at].size = size;
+        regions[at].releasing = 0;
         nregions++;
         if (found < region_floor && found >= HOS_HEAP_BASE) region_floor = found;   /* (not the holes below) */
     }
@@ -177,27 +183,51 @@ static void discard_pages(uint64_t addr, uint64_t size) {
    host/prompts.c: where the game keeps its resources */
 int hos_regions(uint64_t (*out)[2], int cap) {
     LOCK();
-    const int n = nregions;
-    for (int i = 0; i < n && i < cap; i++) out[i][0] = regions[i].addr, out[i][1] = regions[i].addr + regions[i].size;
+    int n = 0;
+    for (int i = 0; i < nregions; i++) {
+        if (regions[i].releasing) continue;
+        if (n < cap) {
+            out[n][0] = regions[i].addr;
+            out[n][1] = regions[i].addr + regions[i].size;
+        }
+        n++;
+    }
     UNLOCK();
     return n;
 }
 
 void hos_region_free(uint64_t addr) {
-    uint64_t freed = 0, freed_size = 0;
+    uint64_t freed_size = 0;
+    int found = 0;
     LOCK();
     for (int i = 0; i < nregions; i++) {
-        if (regions[i].addr == addr) {
-            pages_mark_used_locked(regions[i].addr, regions[i].size);
-            freed = regions[i].addr;
+        if (regions[i].addr == addr && !regions[i].releasing) {
+            /* Keep its address reserved until discarding finishes. The callback may take
+               renderer/virtual-core locks, so it must not run under the region lock. */
+            regions[i].releasing = 1;
+            pages_mark_used_locked(addr, regions[i].size);
             freed_size = regions[i].size;
+            found = 1;
+            break;
+        }
+    }
+    UNLOCK();
+    if (!found) return;
+    if (freed_size) discard_pages(addr, freed_size);
+    LOCK();
+    /* Another allocator can resize or move the table while the callback runs. */
+    for (int i = 0; i < nregions; i++) {
+        if (regions[i].addr == addr && regions[i].releasing) {
             memmove(&regions[i], &regions[i + 1], (nregions - i - 1) * sizeof(Range));
             nregions--;
             break;
         }
     }
+    region_floor = ~0ULL;
+    for (int i = 0; i < nregions; i++)
+        if (regions[i].addr >= HOS_HEAP_BASE && regions[i].addr < region_floor)
+            region_floor = regions[i].addr;
     UNLOCK();
-    if (freed_size) discard_pages(freed, freed_size);
 }
 
 /* ---- nn::os memory -------------------------------------------------------------------------------------- */
@@ -215,8 +245,11 @@ void hos_mark_written(const void *p, size_t n) {
 /* (hookshot) a heap of size bytes ends below the address regions and the guest window's end (no wrap-around: the size
    comes from the game). Also svc SetHeapSize's check (hos_svc.c) */
 int hos_heap_size_fits(uint64_t size) {
+    LOCK();
     const uint64_t limit = region_floor < HOS_SPACE_END ? region_floor : HOS_SPACE_END;
-    return limit >= HOS_HEAP_BASE && size <= limit - HOS_HEAP_BASE;
+    const int fits = limit >= HOS_HEAP_BASE && size <= limit - HOS_HEAP_BASE;
+    UNLOCK();
+    return fits;
 }
 /* nn::os::SetMemoryHeapSize(unsigned long) -> Result */
 HLE(_ZN2nn2os17SetMemoryHeapSizeEm) {
@@ -224,7 +257,7 @@ HLE(_ZN2nn2os17SetMemoryHeapSizeEm) {
     HOS_TRACE_CALL("SetMemoryHeapSize");
     if (!hos_heap_size_fits(size)) {
         hos_log("SetMemoryHeapSize(%#llx): collides with address regions at %#llx", (unsigned long long)size,
-                (unsigned long long)region_floor);
+                (unsigned long long)hos_region_floor());
         RET(0xCA01);   /* svc::ResultOutOfMemory */
         return;
     }
