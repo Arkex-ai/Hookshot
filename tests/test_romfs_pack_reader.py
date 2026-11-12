@@ -140,9 +140,11 @@ def main():
         def build(text):
             (folder/'reader.h').write_text(text, encoding='utf-8')
             exe = folder/('reader.exe' if os.name == 'nt' else 'reader')
-            subprocess.run([args.cxx, '-x', 'c', '-std=c11', '-O1', '-Wall', '-Wextra', '-Werror',
-                            str(source), '-o', str(exe)], check=True, capture_output=True,
-                           creationflags=0x08000000 if os.name == 'nt' else 0)
+            compiled = subprocess.run([args.cxx, '-x', 'c', '-std=c11', '-O1', '-Wall', '-Wextra', '-Werror',
+                                       str(source), '-o', str(exe)], capture_output=True, text=True,
+                                      creationflags=0x08000000 if os.name == 'nt' else 0)
+            if compiled.returncode:
+                raise AssertionError('reader fixture compilation failed:\n' + compiled.stdout + compiled.stderr)
             return exe
         checks = exercise(build(header), folder)
         rejected = []
