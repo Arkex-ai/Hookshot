@@ -1,7 +1,8 @@
 """Deferred synchronization objects stay collectible until their multi-wait links are removed.
 
 Uses the actual object table, collector and Link/Unlink calls with a fake monotonic
-clock. No game, GPU, sleep-based timing or generated source is required.
+clock. A native two-thread regression pauses the old early decrement or the fixed final
+publication, with payload quarantine on a failing control. No game or GPU is required.
 """
 import argparse
 import os
@@ -27,7 +28,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--cc", default=os.environ.get("CC", "clang" if os.name == "nt" else "cc"))
     p.add_argument("--source", type=Path, default=ROOT / "host" / "nn_os_sync.c")
-    p.add_argument("--case", choices=["holder", "multiwait", "growth", "follower", "keep"])
+    p.add_argument("--case", choices=["holder", "multiwait", "growth", "follower", "keep", "race", "race-after"])
     args = p.parse_args()
     cc = shutil.which(args.cc)
     if not cc:
@@ -42,8 +43,15 @@ def main():
                          ("LINK", "HLE(_ZN2nn2os19LinkMultiWaitHolder"),
                          ("UNLINK", "HLE(_ZN2nn2os21UnlinkMultiWaitHolder"),
                          ("UNLINK_ALL", "HLE(_ZN2nn2os24UnlinkAllMultiWaitHolder")]:
-        t = t.replace("@" + name + "@", block(s, marker))
-    cases = [args.case] if args.case else ["holder", "multiwait", "growth", "follower", "keep"]
+        body = block(s, marker)
+        # Expose the old early decrement's interleaving without permitting a real invalid write.
+        if name == "UNLINK":
+            body = body.replace("mw->links[i] = mw->links[--mw->nlinks];",
+                                "test_link_write(&mw->links[i], mw->links[test_paused_decrement(&mw->nlinks)]);")
+            body = body.replace("mw->links[i] = mw->links[n];",
+                                "test_link_write(&mw->links[i], mw->links[n]);")
+        t = t.replace("@" + name + "@", body)
+    cases = [args.case] if args.case else ["holder", "multiwait", "growth", "follower", "keep", "race", "race-after"]
     with tempfile.TemporaryDirectory(prefix="hookshot-sync-retirement-") as tmp:
         c = Path(tmp) / "check.c"
         exe = Path(tmp) / ("check.exe" if os.name == "nt" else "check")

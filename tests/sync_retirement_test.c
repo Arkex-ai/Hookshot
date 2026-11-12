@@ -33,12 +33,60 @@ static int assertions,failures;
 static void check(int ok,const char *why){assertions++;if(!ok){failures++;fprintf(stderr,"FAIL %s\n",why);}}
 /* Teardown can free the fixture's allocations even when the baseline deliberately loses a record.
    Tracking is outside the production algorithm and does not make orphaned objects reachable by it. */
+
+/* Instrumentation only: the base's --nlinks is paused after decrement, before its pending array write.
+   The fixed code is paused before its final release store. Locks/events below create a deterministic
+   two-thread interleaving; the tested table, Unlink and collector bodies otherwise remain unchanged. */
+static void *publication_target, *quarantine_payload;
+static int race_armed, race_after, quarantine_hits, unsafe_writes;
+#ifdef _WIN32
+static HANDLE race_entered, race_continue;
+static void pause_publication(void *p) {
+    if (!race_armed || p != publication_target) return;
+    SetEvent(race_entered);
+    if (WaitForSingleObject(race_continue, 10000) != WAIT_OBJECT_0) abort();
+}
+#else
+#include <time.h>
+#include <errno.h>
+static pthread_mutex_t gate = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t gate_cv = PTHREAD_COND_INITIALIZER;
+static int gate_entered, gate_continue;
+static void gate_wait(int *flag) {
+    struct timespec deadline;
+    if (timespec_get(&deadline, TIME_UTC) != TIME_UTC) abort();
+    deadline.tv_sec += 10;
+    while (!*flag) {
+        int e = pthread_cond_timedwait(&gate_cv, &gate, &deadline);
+        if (e) abort();
+    }
+}
+static void pause_publication(void *p) {
+    if (!race_armed || p != publication_target) return;
+    if (pthread_mutex_lock(&gate)) abort();
+    gate_entered = 1;
+    if (pthread_cond_broadcast(&gate_cv)) abort();
+    gate_wait(&gate_continue);
+    if (pthread_mutex_unlock(&gate)) abort();
+}
+#endif
+static void before_publication(void *p) { if (!race_after) pause_publication(p); }
+static void after_publication(void *p) { if (race_after) pause_publication(p); }
+int test_paused_decrement(int *p) {
+    int n = --*p;
+    before_publication(p);
+    after_publication(p);
+    return n;
+}
+/* The macro's self-reference is the compiler builtin, not recursive macro expansion. */
+#define __atomic_store_n(p, v, order) (before_publication((void *)(p)), __atomic_store_n((p), (v), (order)), after_publication((void *)(p)))
+
 static struct {void *p;size_t n;} allocations[16384];
 static size_t allocation_n;
 static void remember(void *p,size_t n){if(!p||allocation_n==16384)abort();allocations[allocation_n].p=p;allocations[allocation_n++].n=n;}
 static void *counted_malloc(size_t n){void*p=malloc(n);remember(p,n);return p;}
 static void *counted_calloc(size_t n,size_t z){void*p=calloc(n,z);remember(p,n*z);return p;}
-static void counted_free(void *p){if(!p)return;size_t i=0;while(i<allocation_n&&allocations[i].p!=p)i++;if(i==allocation_n)abort();allocations[i]=allocations[--allocation_n];free(p);}
+static void counted_free(void *p){if(!p)return;if(race_armed&&p==quarantine_payload){quarantine_hits++;return;}size_t i=0;while(i<allocation_n&&allocations[i].p!=p)i++;if(i==allocation_n)abort();allocations[i]=allocations[--allocation_n];free(p);}
 static void *counted_realloc(void *p,size_t n){if(!p)return counted_malloc(n);size_t i=0;while(i<allocation_n&&allocations[i].p!=p)i++;if(i==allocation_n)abort();void*q=realloc(p,n);if(!q)abort();allocations[i].p=q;allocations[i].n=n;return q;}
 #define malloc counted_malloc
 #define calloc counted_calloc
@@ -49,6 +97,11 @@ static SRWLOCK mw_lock=SRWLOCK_INIT;
 enum {H_EVENT,H_TIMER,H_THREAD,H_SEMA,H_QUEUE_NOT_EMPTY,H_QUEUE_NOT_FULL,H_NATIVE};
 static void mw_watch_add_locked(uint64_t k){(void)k;}
 static void mw_watch_remove_locked(uint64_t k){(void)k;}
+/* Intercept the array write only to reject it safely if the collector already released that payload. */
+static void test_link_write(Obj **slot, Obj *value) {
+    if (quarantine_hits) unsafe_writes++;
+    else *slot = value;
+}
 @HOLDER_WATCH@
 @LINK@
 @UNLINK@
@@ -119,6 +172,76 @@ static void kept_case(void){
  clock_ns=100000000000LL;tick();
  check(!grave_count&&!spares&&o->q,"HOS_KEEP_DEAD_OBJECTS preserves explicit opt-out");
 }
+
+#ifdef _WIN32
+static DWORD WINAPI unlink_worker(void *p) {
+    _ZN2nn2os21UnlinkMultiWaitHolderEPNS0_19MultiWaitHolderTypeE((Ctx *)p);
+    return 0;
+}
+#else
+static void *unlink_worker(void *p) {
+    _ZN2nn2os21UnlinkMultiWaitHolderEPNS0_19MultiWaitHolderTypeE((Ctx *)p);
+    return NULL;
+}
+#endif
+static void concurrent_unlink(int after) {
+    race_after = after;
+    const uint64_t mk = 0x1000, hk = 0x2000;
+    Obj *mw = fresh(mk, K_MULTIWAIT), *h = fresh(hk, K_HOLDER);
+    h->sem_max = H_NATIVE;
+    Ctx link = {{mk, hk}}, unlink = {{hk}};
+    _ZN2nn2os19LinkMultiWaitHolderEPNS0_13MultiWaitTypeEPNS0_19MultiWaitHolderTypeE(&link);
+    drop(mk);
+    fresh(collide(mk), K_EVENT);
+    clock_ns = 31000000000LL;
+    tick();
+    check(queued(mw) == 1 && !spare(mw), "linked multiwait remains queued before concurrent unlink");
+    Obj **saved_links = mw->links;
+    publication_target = &mw->nlinks;
+    quarantine_payload = saved_links;
+    race_armed = 1;
+#ifdef _WIN32
+    race_entered = CreateEventW(NULL, TRUE, FALSE, NULL);
+    race_continue = CreateEventW(NULL, TRUE, FALSE, NULL);
+    if (!race_entered || !race_continue) abort();
+    HANDLE thread = CreateThread(NULL, 0, unlink_worker, &unlink, 0, NULL);
+    if (!thread || WaitForSingleObject(race_entered, 10000) != WAIT_OBJECT_0) abort();
+#else
+    pthread_t thread;
+    if (pthread_create(&thread, NULL, unlink_worker, &unlink) || pthread_mutex_lock(&gate)) abort();
+    gate_wait(&gate_entered);
+    if (pthread_mutex_unlock(&gate)) abort();
+#endif
+    clock_ns += 31000000000LL;
+    tick();
+    if (after) {
+        check(!queued(mw) && spare(mw) == 1, "collector can recycle immediately after final publication");
+        check(quarantine_hits == 1, "published unlink permits exactly one payload release");
+    } else {
+        check(queued(mw) == 1 && !spare(mw), "collector cannot recycle while unlink still has an array write pending");
+        check(!quarantine_hits && mw->links == saved_links, "links payload survives the unpublished unlink");
+    }
+    /* A failing base is observed, never executed as a UAF: the freed payload is quarantined
+       and its pointer restored before the paused old array write is allowed to finish. */
+    if (quarantine_hits) mw->links = saved_links;
+#ifdef _WIN32
+    SetEvent(race_continue);
+    if (WaitForSingleObject(thread, 10000) != WAIT_OBJECT_0) abort();
+    CloseHandle(thread); CloseHandle(race_entered); CloseHandle(race_continue);
+#else
+    if (pthread_mutex_lock(&gate)) abort();
+    gate_continue = 1;
+    if (pthread_cond_broadcast(&gate_cv) || pthread_mutex_unlock(&gate) || pthread_join(thread, NULL)) abort();
+#endif
+    race_armed = 0;
+    check(!unsafe_writes, "unlink does not write links after publishing reclamation eligibility");
+    if (quarantine_hits) mw->links = NULL;   /* quarantine is physically freed only at fixture teardown */
+    check(!mw->nlinks && !h->mw, "unlink publishes its cleared references when complete");
+    clock_ns += 31000000000LL;
+    tick();
+    check(!queued(mw) && spare(mw) == 1 && !mw->links, "completed unlink permits payload reclamation and one reuse");
+}
+
 int main(int argc,char**argv){
  if(argc!=2)return 90;
  if(!strcmp(argv[1],"holder"))linked_case(1);
@@ -126,6 +249,8 @@ int main(int argc,char**argv){
  else if(!strcmp(argv[1],"growth"))retry_and_growth();
  else if(!strcmp(argv[1],"follower"))follower_and_payload();
  else if(!strcmp(argv[1],"keep"))kept_case();
+ else if(!strcmp(argv[1],"race"))concurrent_unlink(0);
+ else if(!strcmp(argv[1],"race-after"))concurrent_unlink(1);
  else return 91;
  printf("case=%s assertions=%d failures=%d\n",argv[1],assertions,failures);
  while(allocation_n)free(allocations[--allocation_n].p);

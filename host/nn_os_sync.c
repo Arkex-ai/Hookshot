@@ -79,8 +79,9 @@ static Obj *find_locked(uint64_t key) {
 /* An object finalized (or initialized again) is a tombstone (kind 0). The same address initialized again reuses it in
    place (obj): the game initializes and finalizes ~25 short-lived mutexes and events a frame, and a new object each
    time leaked 13 MB a minute in the browser build. A tombstone whose slot another address takes (or that a rehash
-   drops) is freed 30 s later, unless it still links or is linked by a multi-wait (links, mw): freeing one still
-   linked (after 10 s, 2026-10-16) hung most boots. */
+   drops) can be recycled on a later collection pass after 30 s, once it neither links nor is linked by a multi-wait.
+   A blocked record stays in the ring and is retried after the same grace interval; if no unlink can reach it, the
+   record remains pending. Freeing one still linked (after 10 s, 2026-10-16) hung most boots. */
 static Obj **graves;
 static int64_t *grave_times;
 static size_t grave_head, grave_count, grave_cap;
@@ -102,7 +103,10 @@ static void bury_locked(Obj *o) {
         Obj *d = graves[grave_head];
         grave_head = (grave_head + 1) % grave_cap;
         grave_count--;
-        if (!d->kind && !d->mw && !d->nlinks) {
+        /* Unlink publishes the cleared references only after its final object/links access.
+           Acquiring those stores avoids taking mw_lock under table_lock (the reverse order exists). */
+        if (!__atomic_load_n(&d->kind, __ATOMIC_ACQUIRE) && !__atomic_load_n(&d->mw, __ATOMIC_ACQUIRE) &&
+            !__atomic_load_n(&d->nlinks, __ATOMIC_ACQUIRE)) {
             free(d->q);
             free(d->links);
             d->q = NULL;
@@ -1152,20 +1156,27 @@ HLE(_ZN2nn2os19LinkMultiWaitHolderEPNS0_13MultiWaitTypeEPNS0_19MultiWaitHolderTy
         mw->caplinks = mw->caplinks ? mw->caplinks * 2 : 8;
         mw->links = (Obj **)realloc(mw->links, mw->caplinks * sizeof *mw->links);
     }
-    mw->links[mw->nlinks++] = h;
-    h->mw = mw;
+    const int n = mw->nlinks;
+    mw->links[n] = h;
+    __atomic_store_n(&mw->nlinks, n + 1, __ATOMIC_RELEASE);
+    __atomic_store_n(&h->mw, mw, __ATOMIC_RELEASE);
     if (holder_watch(h)) mw_watch_add_locked(holder_watch(h));
     ReleaseSRWLockExclusive(&mw_lock);
 }
 HLE(_ZN2nn2os21UnlinkMultiWaitHolderEPNS0_19MultiWaitHolderTypeE) {
-    Obj *h = obj(ARG(0), K_HOLDER), *mw = h->mw;
+    Obj *h = obj(ARG(0), K_HOLDER);
     AcquireSRWLockExclusive(&mw_lock);
+    Obj *mw = __atomic_load_n(&h->mw, __ATOMIC_ACQUIRE);
+    int n = mw ? mw->nlinks : 0;
     if (mw) {
-        for (int i = 0; i < mw->nlinks; i++)
-            if (mw->links[i] == h) { mw->links[i] = mw->links[--mw->nlinks]; break; }
+        for (int i = 0; i < n; i++)
+            if (mw->links[i] == h) { n--; mw->links[i] = mw->links[n]; break; }
         if (holder_watch(h)) mw_watch_remove_locked(holder_watch(h));
     }
-    h->mw = NULL;
+    /* A buried holder or multi-wait can be reclaimed immediately after its release store.
+       Do not access it again after publishing that its last link is gone. */
+    __atomic_store_n(&h->mw, NULL, __ATOMIC_RELEASE);
+    if (mw) __atomic_store_n(&mw->nlinks, n, __ATOMIC_RELEASE);
     ReleaseSRWLockExclusive(&mw_lock);
 }
 /* WaitAny / TimedWaitAny / TryWaitAny -> the first ready holder, or 0. timeout_ns: < 0 forever, 0 try.
@@ -1206,9 +1217,9 @@ HLE(_ZN2nn2os24UnlinkAllMultiWaitHolderEPNS0_13MultiWaitTypeE) {
     AcquireSRWLockExclusive(&mw_lock);
     for (int i = 0; i < mw->nlinks; i++) {
         if (holder_watch(mw->links[i])) mw_watch_remove_locked(holder_watch(mw->links[i]));
-        mw->links[i]->mw = NULL;
+        __atomic_store_n(&mw->links[i]->mw, NULL, __ATOMIC_RELEASE);   /* last access to this holder */
     }
-    mw->nlinks = 0;
+    __atomic_store_n(&mw->nlinks, 0, __ATOMIC_RELEASE);   /* after every links-array access */
     ReleaseSRWLockExclusive(&mw_lock);
 }
 HLE(_ZN2nn2os22MoveAllMultiWaitHolderEPNS0_13MultiWaitTypeES2_) {
@@ -1219,10 +1230,12 @@ HLE(_ZN2nn2os22MoveAllMultiWaitHolderEPNS0_13MultiWaitTypeES2_) {
             to->caplinks = to->caplinks ? to->caplinks * 2 : 8;
             to->links = (Obj **)realloc(to->links, to->caplinks * sizeof *to->links);
         }
-        to->links[to->nlinks++] = from->links[i];
-        from->links[i]->mw = to;
+        const int n = to->nlinks;
+        to->links[n] = from->links[i];
+        __atomic_store_n(&to->nlinks, n + 1, __ATOMIC_RELEASE);
+        __atomic_store_n(&from->links[i]->mw, to, __ATOMIC_RELEASE);
     }
-    from->nlinks = 0;
+    __atomic_store_n(&from->nlinks, 0, __ATOMIC_RELEASE);
     ReleaseSRWLockExclusive(&mw_lock);
 }
 
