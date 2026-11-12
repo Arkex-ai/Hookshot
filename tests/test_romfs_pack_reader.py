@@ -140,7 +140,9 @@ def main():
         def build(text):
             (folder/'reader.h').write_text(text, encoding='utf-8')
             exe = folder/('reader.exe' if os.name == 'nt' else 'reader')
+            # Match the native build's CRT contract: MSVC headers deprecate standard fopen/sscanf.
             compiled = subprocess.run([args.cxx, '-x', 'c', '-std=c11', '-O1', '-Wall', '-Wextra', '-Werror',
+                                       '-D_CRT_SECURE_NO_WARNINGS',
                                        str(source), '-o', str(exe)], capture_output=True, text=True,
                                       creationflags=0x08000000 if os.name == 'nt' else 0)
             if compiled.returncode:
