@@ -150,8 +150,9 @@ static void pull(MfAv1 *m, mf_av1_picture_fn fn, void *user) {
             IMFMediaBuffer *b = NULL;
             const DWORD size = m->out_size ? m->out_size : (DWORD)((size_t)(m->stride > 0 ? m->stride : m->w) * m->h * 3 / 2);
             if (FAILED(MFCreateSample(&own)) || FAILED(MFCreateMemoryBuffer(size, &b))) { if (own) IMFSample_Release(own); return; }
-            IMFSample_AddBuffer(own, b);
+            const HRESULT attached = IMFSample_AddBuffer(own, b);
             IMFMediaBuffer_Release(b);
+            if (FAILED(attached)) { IMFSample_Release(own); return; }
             ob.pSample = own;
         }
         DWORD status = 0;
@@ -179,18 +180,19 @@ static void pull(MfAv1 *m, mf_av1_picture_fn fn, void *user) {
             LONG pitch = 0;
             const int locked2d = SUCCEEDED(IMFMediaBuffer_QueryInterface(b, &IID_IMF2DBuffer, (void **)&b2)) &&
                                  SUCCEEDED(IMF2DBuffer_Lock2D(b2, &p, &pitch));
-            if (!locked2d && SUCCEEDED(IMFMediaBuffer_Lock(b, &p, NULL, &len)))
-                pitch = m->stride > 0 ? m->stride : m->w;
-            if (p && pitch > 0) {
+            const int locked = locked2d || SUCCEEDED(IMFMediaBuffer_Lock(b, &p, NULL, &len));
+            if (locked && !locked2d) pitch = m->stride > 0 ? m->stride : m->w;
+            if (locked && p && pitch > 0) {
                 /* the chroma plane follows the luma rows the buffer has (the padded height): rows = 1.5 x that */
                 const DWORD rows = len / (DWORD)pitch;
                 const int luma_rows = rows >= (DWORD)m->h * 3 / 2 ? (int)(rows * 2 / 3) : m->h;
                 const int ow = m->want_w > 0 && m->want_w < m->w ? m->want_w : m->w;
                 const int oh = m->want_h > 0 && m->want_h < m->h ? m->want_h : m->h;
                 fn(user, p, p + (size_t)pitch * luma_rows, ow, oh, (int)pitch, (int64_t)t100 * 100);
-                if (locked2d) IMF2DBuffer_Unlock2D(b2);
-                else IMFMediaBuffer_Unlock(b);
             }
+            /* A rejected picture still owns its successful lock. */
+            if (locked2d) IMF2DBuffer_Unlock2D(b2);
+            else if (locked) IMFMediaBuffer_Unlock(b);
             if (b2) IMF2DBuffer_Release(b2);
             IMFMediaBuffer_Release(b);
         }
@@ -216,11 +218,20 @@ void mf_av1_decode(void *h, const uint8_t *data, size_t n, int64_t pts, mf_av1_p
     IMFMediaBuffer *b = NULL;
     if (FAILED(MFCreateSample(&s)) || FAILED(MFCreateMemoryBuffer((DWORD)n, &b))) { if (s) IMFSample_Release(s); return; }
     BYTE *p = NULL;
-    IMFMediaBuffer_Lock(b, &p, NULL, NULL);
+    const HRESULT locked = IMFMediaBuffer_Lock(b, &p, NULL, NULL);
+    if (FAILED(locked) || !p) {
+        if (SUCCEEDED(locked)) IMFMediaBuffer_Unlock(b);
+        IMFMediaBuffer_Release(b);
+        IMFSample_Release(s);
+        return;
+    }
     memcpy(p, data, n);
     IMFMediaBuffer_Unlock(b);
-    IMFMediaBuffer_SetCurrentLength(b, (DWORD)n);
-    IMFSample_AddBuffer(s, b);
+    if (FAILED(IMFMediaBuffer_SetCurrentLength(b, (DWORD)n)) || FAILED(IMFSample_AddBuffer(s, b))) {
+        IMFMediaBuffer_Release(b);
+        IMFSample_Release(s);
+        return;
+    }
     IMFSample_SetSampleTime(s, pts / 100);
     for (int tries = 0; tries < 2; tries++) {
         const HRESULT hr = IMFTransform_ProcessInput(m->mft, 0, s, 0);
