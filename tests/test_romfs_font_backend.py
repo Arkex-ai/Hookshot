@@ -40,6 +40,7 @@ static HMODULE vk_module;
 static int packed, init_calls;
 static const MkwVkHost* received;
 static const MkwVkRenderer* vk;
+static unsigned provider_version = MKWVK_API_VERSION;
 static unsigned created_calls;
 static const nvn_prog* observed_program;
 static void authored_program_created(const nvn_prog* p) { ++created_calls; observed_program=p; }
@@ -53,7 +54,7 @@ static DWORD GetModuleFileNameA(void*, char* out, unsigned) {
 static HMODULE LoadLibraryA(const char*) { return reinterpret_cast<void*>(1); }
 static DWORD GetLastError() { return 0; }
 static const MkwVkRenderer* fake_init(const MkwVkHost* api) {
-    static MkwVkRenderer renderer{}; renderer.version = MKWVK_API_VERSION;
+    static MkwVkRenderer renderer{}; renderer.version = provider_version;
     renderer.nvn_program_created = authored_program_created;
     received = api; ++init_calls; return &renderer;
 }
@@ -79,7 +80,9 @@ int main() {
             std::fprintf(stderr, "font source mismatch: packed=%d\n", packed); return 3;
         }
     }
-    std::puts("PASS: actual loader selects legacy folder fonts and packed virtual fonts");
+    provider_version = MKWVK_API_VERSION - 1;
+    if (load_vulkan("older.dll")) return 6;
+    std::puts("PASS: actual loader preserves callbacks, selects folder/packed fonts and rejects an older renderer ABI");
 }
 '''
 
