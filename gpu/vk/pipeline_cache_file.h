@@ -8,6 +8,8 @@
 #include <cstdlib>
 #include <cstdint>
 #include <cstring>
+#include <ctime>
+#include <filesystem>
 #include <limits>
 #include <string>
 #include <utility>
@@ -17,14 +19,15 @@
 #include <cerrno>
 #include <fcntl.h>
 #include <sys/mman.h>
+#include <sys/file.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #endif
 
 namespace mkwvk {
 // File-backed, contiguous Vulkan cache bytes. Published files are replaced, never
-// truncated. Linux reads use an unlinked owned snapshot: a writer replacing or
-// truncating the original cannot invalidate the view supplied to the driver.
+// truncated. Read views retain the opened file/inode across atomic replacement.
+// External in-place truncation is not supported while a Linux view is in use.
 // Like other mapped files, media faults are not recoverable C++ exceptions.
 class PipelineCacheFile {
     void* bytes_ = nullptr;
@@ -56,12 +59,52 @@ class PipelineCacheFile {
         return ftruncate(file_, (off_t)n) == 0;
 #endif
     }
+    bool refresh_modified() {
+#if defined(_WIN32)
+        FILETIME now; GetSystemTimeAsFileTime(&now);
+        return SetFileTime(file_, nullptr, nullptr, &now) != 0;
+#else
+        return futimens(file_, nullptr) == 0;
+#endif
+    }
+    bool preserve_permissions() {
+#if !defined(_WIN32)
+        struct stat existing{};
+        if (lstat(destination_.c_str(), &existing) == 0) {
+            // Keep an existing cache's access bits. New files retain mkstemp's
+            // private 0600 rather than overriding a restrictive process umask.
+            if (S_ISREG(existing.st_mode) && existing.st_uid == geteuid())
+                return fchmod(file_, existing.st_mode & 0777) == 0;
+        } else if (errno != ENOENT) return false;
+#endif
+        return true;
+    }
+    static bool temporary_name(const std::string& name) {
+        const std::string marker = ".bin.tmp-", play = "mkw_vk_pipelines_play_";
+        const size_t at = name.find(marker);
+        if (at == std::string::npos) return false;
+        const std::string stem = name.substr(0, at), suffix = name.substr(at + marker.size());
+        const auto digits = [](const std::string& s) {
+            return !s.empty() && s.find_first_not_of("0123456789") == std::string::npos;
+        };
+        if (stem != "mkw_vk_pipelines") {
+            if (stem.compare(0, play.size(), play)) return false;
+            const std::string number = stem.substr(play.size());
+            if (number.size() > 9 || !digits(number)) return false;
+        }
+        if (suffix.size() == 6 && std::all_of(suffix.begin(), suffix.end(), [](unsigned char c) {
+                return (c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
+            })) return true;
+        const size_t dash = suffix.find('-');
+        return dash != std::string::npos && digits(suffix.substr(0, dash)) && digits(suffix.substr(dash + 1));
+    }
     bool map(bool writable) {
 #if defined(_WIN32)
         mapping_ = CreateFileMappingW(file_, nullptr, writable ? PAGE_READWRITE : PAGE_READONLY, 0, 0, nullptr);
         if (mapping_) bytes_ = MapViewOfFile(mapping_, writable ? FILE_MAP_WRITE : FILE_MAP_READ, 0, 0, size_);
 #else
-        bytes_ = mmap(nullptr, size_, writable ? PROT_READ | PROT_WRITE : PROT_READ, MAP_SHARED, file_, 0);
+        bytes_ = mmap(nullptr, size_, writable ? PROT_READ | PROT_WRITE : PROT_READ,
+                      writable ? MAP_SHARED : MAP_PRIVATE, file_, 0);
         if (bytes_ == MAP_FAILED) bytes_ = nullptr;
 #endif
         return bytes_ != nullptr;
@@ -117,7 +160,7 @@ class PipelineCacheFile {
         file_ = mkstemp(name.data());
         if (file_ < 0) return false;
         temporary_ = std::move(name);
-        return fcntl(file_, F_SETFD, FD_CLOEXEC) == 0;
+        return fcntl(file_, F_SETFD, FD_CLOEXEC) == 0 && flock(file_, LOCK_EX | LOCK_NB) == 0;
 #endif
     }
 public:
@@ -173,14 +216,67 @@ public:
     size_t size() const { return bytes_ ? size_ : 0; }
     bool empty() const { return !bytes_; }
     bool rejected() const { return rejected_; } // Header incompatible, not an acquisition/I/O failure.
+    // Recognized aged cache temporaries, never published caches or a live writer.
+    static size_t cleanup_temporaries(const std::string& directory, uint64_t age_seconds = 24 * 60 * 60) {
+        if (directory.find('\0') != std::string::npos || age_seconds > UINT64_MAX / 10000000) return 0;
+        const std::string folder = directory.empty() ? "." : directory;
+#if defined(_WIN32)
+        const auto path = wide(folder); if (path.empty()) return 0;
+        FILETIME clock; GetSystemTimeAsFileTime(&clock);
+        ULARGE_INTEGER now; now.LowPart = clock.dwLowDateTime; now.HighPart = clock.dwHighDateTime;
+#else
+        const std::filesystem::path path(folder);
+        const time_t now = time(nullptr); if (now < 0) return 0;
+#endif
+        size_t removed = 0;
+        std::error_code ec;
+        for (std::filesystem::directory_iterator i(path, ec), end; !ec && i != end; i.increment(ec)) {
+            const auto utf8 = i->path().filename().u8string();
+            const std::string name(reinterpret_cast<const char*>(utf8.data()), utf8.size());
+            if (!temporary_name(name)) continue;
+#if defined(_WIN32)
+            HANDLE f = CreateFileW(i->path().c_str(), DELETE | FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, nullptr,
+                                   OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+            if (f == INVALID_HANDLE_VALUE) continue;
+            BY_HANDLE_FILE_INFORMATION info{};
+            if (GetFileType(f) == FILE_TYPE_DISK && GetFileInformationByHandle(f, &info) && info.nNumberOfLinks == 1 &&
+                !(info.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT))) {
+                ULARGE_INTEGER changed; changed.LowPart = info.ftLastWriteTime.dwLowDateTime; changed.HighPart = info.ftLastWriteTime.dwHighDateTime;
+                if (now.QuadPart >= changed.QuadPart && now.QuadPart - changed.QuadPart >= age_seconds * 10000000) {
+                    FILE_DISPOSITION_INFO discard{TRUE};
+                    if (SetFileInformationByHandle(f, FileDispositionInfo, &discard, sizeof discard)) ++removed;
+                }
+            }
+            CloseHandle(f);
+#else
+            const auto filename = i->path().string();
+            int f = open(filename.c_str(), O_RDWR | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
+            if (f < 0) continue;
+            struct stat info{}, named{};
+            if (flock(f, LOCK_EX | LOCK_NB) == 0 && fstat(f, &info) == 0 && S_ISREG(info.st_mode) &&
+                info.st_uid == geteuid() && info.st_nlink == 1 && now >= info.st_mtime &&
+                (uint64_t)(now - info.st_mtime) >= age_seconds && lstat(filename.c_str(), &named) == 0 &&
+                info.st_dev == named.st_dev && info.st_ino == named.st_ino && unlink(filename.c_str()) == 0) ++removed;
+            ::close(f);
+#endif
+        }
+        return removed;
+    }
     static PipelineCacheFile writable(const std::string& path, size_t capacity) {
         PipelineCacheFile result;
         if (!capacity || capacity > (uint64_t)INT64_MAX || !result.create_temporary(path)) return {};
         result.size_ = capacity;
-        if (!result.resize(capacity) || !result.map(true)) return {};
+        if (!result.resize(capacity)) return {};
+#if !defined(_WIN32)
+        // ftruncate can leave sparse holes. Reserve backing storage before the
+        // driver writes through mmap, so ENOSPC is a clean failure, not SIGBUS.
+        // posix_fallocate returns an error number directly, not -1/errno.
+        if (posix_fallocate(result.file_, 0, (off_t)capacity) != 0) return {};
+#endif
+        if (!result.map(true)) return {};
         return result;
     }
-    // Validate the small header BEFORE copying/mapping the full payload.
+    // Validate the small header BEFORE mapping the full payload.
     template<class Valid> static PipelineCacheFile read(const std::string& path, Valid valid) {
         PipelineCacheFile result;
         uint8_t header[32]{};
@@ -188,11 +284,11 @@ public:
 #if defined(_WIN32)
         auto name = wide(path); if (name.empty()) return {};
         result.file_ = CreateFileW(name.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_DELETE, nullptr,
-                                  OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+                                  OPEN_EXISTING, 0, nullptr);
         if (result.file_ == INVALID_HANDLE_VALUE) return {};
         BY_HANDLE_FILE_INFORMATION info{}; LARGE_INTEGER n{}; DWORD got = 0;
         if (GetFileType(result.file_) != FILE_TYPE_DISK || !GetFileInformationByHandle(result.file_, &info) ||
-            (info.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) ||
+            (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ||
             !GetFileSizeEx(result.file_, &n) || n.QuadPart <= 32 ||
             !ReadFile(result.file_, header, sizeof header, &got, nullptr) || got != sizeof header) return {};
         length = (uint64_t)n.QuadPart;
@@ -202,33 +298,15 @@ public:
         if (!result.map(false)) return {};
 #else
         if (path.empty() || path.find('\0') != std::string::npos) return {};
-        int source = open(path.c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
+        result.file_ = open(path.c_str(), O_RDONLY | O_CLOEXEC | O_NONBLOCK);
+        int source = result.file_;
         if (source < 0) return {};
-        struct Source { int fd; ~Source() { ::close(fd); } } owned{source};
         struct stat st{};
         if (fstat(source, &st) || !S_ISREG(st.st_mode) || st.st_size <= 32 ||
             pread(source, header, sizeof header, 0) != sizeof header) return {};
         length = (uint64_t)st.st_size;
         if (length > SIZE_MAX) return {};
         if (!valid(header, length)) return rejected_file();
-        if (!result.create_temporary(path)) return {};
-        if (unlink(result.temporary_.c_str())) return {};
-        result.temporary_.clear(); result.destination_.clear();
-        uint8_t chunk[64 * 1024]; uint64_t offset = 0;
-        while (offset < length) {
-            size_t want = (size_t)std::min<uint64_t>(sizeof chunk, length - offset);
-            ssize_t n = pread(source, chunk, want, (off_t)offset);
-            if (n < 0 && errno == EINTR) continue;
-            if (n <= 0) return {};
-            size_t done = 0;
-            while (done < (size_t)n) {
-                ssize_t wrote = write(result.file_, chunk + done, (size_t)n - done);
-                if (wrote < 0 && errno == EINTR) continue;
-                if (wrote <= 0) return {};
-                done += (size_t)wrote;
-            }
-            offset += (uint64_t)n;
-        }
         result.size_ = (size_t)length;
         if (!result.map(false)) return {};
 #endif
@@ -241,7 +319,9 @@ public:
 #else
         if (msync(bytes_, actual, MS_SYNC)) return false;
 #endif
-        if (!unmap() || !resize(actual)) return false;
+        // Refresh before unlocking: a paused writer's completed temporary is
+        // fresh during the close/rename gap, not eligible for the sweeper.
+        if (!unmap() || !resize(actual) || !preserve_permissions() || !refresh_modified()) return false;
 #if defined(_WIN32)
         if (!FlushFileBuffers(file_) || !close()) return false;
         auto from = wide(temporary_), to = wide(destination_);

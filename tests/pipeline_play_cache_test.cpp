@@ -76,6 +76,7 @@ static bool fail_reads = false, fail_cache_create = false;
 struct ReadPart : std::vector<uint8_t> {
     bool incompatible = false;
     bool rejected() const { return incompatible; }
+    bool reset() { clear(); incompatible=false; return true; }
 };
 ReadPart pcache_file_read(const std::string& path) {
     ReadPart data;
@@ -338,8 +339,9 @@ int run(const std::string& name) {
         fail_reads = name == "merge-read-failed";
         fail_cache_create = name == "merge-create-failed";
         CHECK(play_files_merge() == 0);
-        CHECK(exists(play_path(1)));
+        CHECK(exists(play_path(1)) == (name == "merge-read-failed"));
         fail_reads = false; fail_cache_create = false;
+        if(name == "merge-create-failed")write_file(play_path(1), "FAKE", {40});
         CHECK(file_keys(play_path(1)) == std::set<uint64_t>{40});
         CHECK(play_files_merge() == 1 && has(pcache, 40));
     } else if (name == "merge") {
