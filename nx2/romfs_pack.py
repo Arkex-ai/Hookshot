@@ -26,7 +26,10 @@ def identity(info):
     # Windows ctime is deprecated and can differ between path/handle APIs.
     # Use creation time there; POSIX ctime remains a change detector.
     change = getattr(info, 'st_birthtime_ns', 0) if os.name == 'nt' else info.st_ctime_ns
-    return (info.st_dev, info.st_ino, info.st_mode, info.st_size,
+    # Windows may report a directory's allocation size or zero between scans.
+    # Directories carry no pack payload; membership and identity are checked separately.
+    size = 0 if os.name == 'nt' and stat.S_ISDIR(info.st_mode) else info.st_size
+    return (info.st_dev, info.st_ino, info.st_mode, size,
             info.st_mtime_ns, change)
 
 

@@ -85,6 +85,64 @@ class PackTests(unittest.TestCase):
         packer.pack(self.source, self.target)
         self.assertEqual(decode(self.target)['older-content'], b'authored older content')
 
+    @unittest.skipUnless(os.name == 'nt', 'Windows directory metadata size has no payload meaning')
+    def test_windows_directory_metadata_size_can_change_without_source_change(self):
+        directory = self.source / 'nested'
+        directory.mkdir()
+        (directory / 'payload').write_bytes(b'authored bytes')
+        original = Path.lstat
+        visits = 0
+
+        class DirectoryStat:
+            def __init__(self, info, size):
+                self.info, self.st_size = info, size
+
+            def __getattr__(self, name):
+                return getattr(self.info, name)
+
+        def observed(path, *args, **kwargs):
+            nonlocal visits
+            info = original(path, *args, **kwargs)
+            if path == directory:
+                visits += 1
+                return DirectoryStat(info, 4096 if visits == 1 else 0)
+            return info
+
+        with mock.patch.object(Path, 'lstat', observed):
+            packer.pack(self.source, self.target)
+        self.assertGreaterEqual(visits, 2)
+        self.assertEqual(decode(self.target), {'nested': None, 'nested/payload': b'authored bytes'})
+
+    def test_directory_identity_changes_still_preserve_previous_output(self):
+        directory = self.source / 'nested'
+        directory.mkdir()
+        (directory / 'payload').write_bytes(b'authored bytes')
+        original = Path.lstat
+
+        class ReplacedDirectory:
+            def __init__(self, info):
+                self.info, self.st_ino = info, info.st_ino + 1
+
+            def __getattr__(self, name):
+                return getattr(self.info, name)
+
+        visits = 0
+
+        def observed(path, *args, **kwargs):
+            nonlocal visits
+            info = original(path, *args, **kwargs)
+            if path == directory:
+                visits += 1
+                if visits > 1:
+                    return ReplacedDirectory(info)
+            return info
+
+        self.target.write_bytes(b'previous output')
+        with mock.patch.object(Path, 'lstat', observed), self.assertRaises(ValueError):
+            packer.pack(self.source, self.target, replace=True)
+        self.assertEqual(self.target.read_bytes(), b'previous output')
+        self.assert_no_partial()
+
     def test_source_change_keeps_previous_output(self):
         path = self.source / 'payload'
         path.write_bytes(b'a' * (packer.CHUNK + 7))

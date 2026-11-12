@@ -1,7 +1,7 @@
 # Optional packed RomFS (development candidate)
 
-This branch is unfinished: writer, reader, nn_fs file/directory paths and startup selection have authored checks,
-but broader compatibility validation and font integration are incomplete. Do not remove an extracted RomFS folder or
+This branch is unfinished: writer, reader, nn_fs file/directory paths, startup selection and native font reads have authored checks,
+but broader image-backed compatibility validation is incomplete. Do not remove an extracted RomFS folder or
 use this as a release feature.
 
 The intended delivery is an optional read-only asset backend with the existing folder backend, mod ordering,
@@ -87,6 +87,10 @@ immediate children in index order, with basename lengths and file sizes. Mode1 s
 Count reports the total for the mode without changing the open cursor, even after partial reads. Descendant ranges
 are skipped by binary search while preserving siblings such as `dir.ext` and `dir0`.
 
-Still required before release: actual mod-index/prompt integration validation, folder/case/path parity,
-font callback and versioned renderer interface, explicit selection/update
-policy, native build, full regressions and isolated game validation. No image/index/game-derived fixture is shipped.
+Windows directory metadata may report an allocation size or zero between scans. The writer treats directory
+payload size as zero while retaining identity, permissions, timestamps and complete membership checks. File size
+and before/after read checks remain strict. A replaced directory still aborts publication and preserves prior output.
+
+Still required before release: image-backed game and generated-prompt/mod integration validation, final exact-head
+native build and full regressions. The host font callback uses renderer interface version19; explicit image selection
+and authored Windows case/path parity are implemented. No image/index/game-derived fixture is shipped.
