@@ -113,7 +113,7 @@ suites had the same failures on the candidate and its exact base `ef81aee7`: Lin
 Windows 442/4/33 versus 435/4/33 (passed/failed/skipped). These are not all-green full-suite results.
 Linux source tests do not prove Linux gameplay. The Windows runs cover early gameplay and menus, not the
 campaign, deterministic frame equivalence, loading speed or memory savings. The host font callback uses renderer
-interface version22, appending after main's version20 screen-size callback. No image/index/game-derived fixture is shipped.
+interface version22, retaining main's screen-size and program-created callbacks. No image/index/game-derived fixture is shipped.
 
 The host selects the virtual font callback only when a packed image is open, before initializing the renderer.
 Folder installations keep the original direct-file Reader path, including its input-size behavior. The 64 MiB
@@ -135,4 +135,24 @@ The original failed run is retained; these are not full-green local suites. Host
 
 ## Prompt resource-table discovery
 
-After main added exact game-table selection for prompt/mod merging, packed mode discovers the first matching base file by name in the immutable image index. It ignores directories, nested files and stale loose roots, and refuses an undersized output buffer. Folder mode retains the existing directory enumeration. This preserves main's first-by-name rule before selecting the matching mod table; it does not introduce a new version-selection rule. The game-free regression runs the actual prompt discovery and complete filesystem backend against authored folders/images, including an image-only root; the old folder-only caller fails the stale-root assertion. No new gameplay or performance result is claimed.
+After main added exact game-table selection for prompt/mod merging, packed mode discovers the first matching base file by name in the immutable image index. It ignores directories, nested files and stale loose roots, and refuses an undersized output buffer. Folder mode retains the existing directory enumeration. This preserves main's first-by-name rule before selecting the matching mod table; it does not introduce a new version-selection rule. The game-free regression runs the actual prompt discovery and complete filesystem backend against authored folders/images, including an image-only root; the old folder-only caller fails the stale-root assertion. The no-mod native runs below do not exercise a mod-supplied resource table.
+
+## Matched Windows runtime validation
+
+Implementation `1cd9b772`, rebased on main `4dd972a8`, was compiled as a matching Windows host/backend pair.
+The complete `nx2` and a64-kit generator trees were unchanged from the integrity-checked `3bdde84f` generation;
+that verified output and its original provenance were retained. Normal source/header/flag keys reused objects;
+no cache guard or lift stamp was overridden. The 16 prompt assets likewise retain their `3bdde84f` producer.
+
+Two fresh scripted processes used identical binaries, assets, options and copies of the same Kokiri child checkpoint:
+one with the extracted folder, the other with the packed image and a loose-root path that did not exist. Both rendered
+Kokiri and its HUD, opened the native Graphics menu in zh-Hans with readable visible labels/help text, and logged
+successful acquisition of the game's FZLTHB font with normal system-font supplementation. The guest inventory also
+displayed the selected Xbox LB/RB and Select/Back prompts. Both exited normally; source checkpoint hashes remained
+unchanged, as did the packed image's hash.
+
+The output was configured as 3440x1440/21:9, with an observed 1444x720 window client. This is windowed correctness
+coverage, not validation of a physical ultrawide display. The native-menu inspection used a window capture:
+the control bridge's game-frame PNG does not include the native ImGui menu. Only the visible glyphs were checked,
+not the entire CJK repertoire. No Linux/AMD gameplay, mod-table interoperability, full-campaign, FPS, startup-time or
+memory-saving result is implied. No game-derived files or private captures are included in the repository.
