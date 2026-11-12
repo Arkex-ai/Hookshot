@@ -120,3 +120,15 @@ Folder installations keep the original direct-file Reader path, including its in
 compressed-asset limit applies only to the packed virtual reader; its decoded-size limit remains 256 MiB.
 Neither the Builder nor launcher selects packed mode automatically. Acceptance of this optional CLI capability
 remains a maintainer decision on #1007. Other open API20 changes require the later merge to rebase and bump the API.
+
+
+Review validation on main `51da0464`, source `329b2a93`: twelve focused checks pass on each OS. The actual renderer
+loader selects no virtual font callback in folder mode and the packed callback in image mode. Causal controls
+restore the old folder selection or force filesystem probes with a null mod base; both are rejected on both OSes.
+The matching Windows native build and current prompt generation pass. Folder and image-only processes load Kokiri,
+log FZLTHB merged into the zh-Hans font atlas and exit normally with the source checkpoint preserved. Gameplay
+captures are normal; the native menu is absent from those captures, so no new per-glyph/menu visual claim is made.
+Generation reuses verified `23c50087` output: all existing nx2 generator modules are identical, with only the new
+standalone packer added. Prompt assets are regenerated from this source. Full suites: Windows465/3/35 (the same
+three exact-main failures); Linux478/1/24, failing the unchanged control fixture's newest-save ordering assertion.
+The original failed run is retained; these are not full-green local suites. Hosted CI is recorded in the PR.
