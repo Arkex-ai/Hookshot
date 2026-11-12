@@ -149,6 +149,25 @@ int main(int argc, char** argv) {
         CHECK("no Latin letters: not used", r.read("Test").empty());
         CHECK("though it is a font", bfotf_font(bfotf(hebrew, key)) == hebrew);
     }
+    // ---- translated-menu script fonts use the same virtual source, including the TrueType suffix ----
+    {
+        set_up(root / "scripts", zframe(sarc("zs.zsdic", dict)), zframe(bfotf(hebrew, key)));
+        write(root / "scripts" / (std::string(scalable) + "Fallback.Nin_Ounce_NVN2.bfttf.zs"), zframe(bfotf(hebrew, key)));
+        asset_root = (root / "scripts").string();
+        Reader r;
+        CHECK("script callback opens without loose root", r.open("", authored_asset));
+        CHECK("script callback accepts non-Latin OpenType", r.read_script("Test") == hebrew);
+        CHECK("script callback tries TrueType suffix", r.read_script("Fallback") == hebrew);
+        CHECK("missing script stays empty", r.read_script("Missing").empty());
+        asset_fault = 2;
+        CHECK("script callback failure stays empty", r.read_script("Test").empty());
+        asset_fault = 0;
+        CHECK("script callback recovers", r.read_script("Test") == hebrew);
+        Reader loose;
+        CHECK("loose script source opens", loose.open(asset_root));
+        CHECK("loose script font still loads", loose.read_script("Test") == hebrew);
+        CHECK("loose TrueType suffix still loads", loose.read_script("Fallback") == hebrew);
+    }
     // ---- the archive: a truncated frame, a name offset past it, a longer name that starts the same ----
     {
         Bytes pack = zframe(sarc("zs.zsdic", dict));
