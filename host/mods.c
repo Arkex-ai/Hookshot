@@ -208,7 +208,7 @@ int hos_mods_file(const char *rel, char *out, size_t cap) {
 }
 
 /* nn_fs.c, listing a RomFS folder: fn(arg, name, is_dir, size) for each mod entry directly in it that the game's own
-   folder (base_dir, a host path; may not exist) does not have. Returns how many. */
+   folder (base_dir, a host path; NULL means no loose base) does not have. Returns how many. */
 int hos_mods_dir_extras(const char *rel, const char *base_dir, void (*fn)(void *, const char *, int, uint64_t),
                         void *arg) {
     if (!table_n) return 0;
@@ -227,9 +227,11 @@ int hos_mods_dir_extras(const char *rel, const char *base_dir, void (*fn)(void *
         if (!*name || strchr(name, '/')) continue;   /* (deeper) */
         const char *real = last_sep(e->host);   /* (the name as the mod spells it) */
         real = real ? real + 1 : e->host;
-        char base[MAX_PATH];
-        snprintf(base, sizeof base, "%s\\%s", base_dir, real);
-        if (GetFileAttributesA(base) != INVALID_FILE_ATTRIBUTES) continue;
+        if (base_dir) {
+            char base[MAX_PATH];
+            snprintf(base, sizeof base, "%s\\%s", base_dir, real);
+            if (GetFileAttributesA(base) != INVALID_FILE_ATTRIBUTES) continue;
+        }
         fn(arg, real, e->is_dir, e->size);
         n++;
     }

@@ -2,6 +2,15 @@
 
 static const char *generated, *merged;
 static int saw_mod_prompt, saw_merge;
+static int attribute_calls;
+DWORD authored_mod_attributes(const char *path) {
+    ++attribute_calls;
+    return GetFileAttributesA(path);
+}
+static void count_mod_entry(void *out, const char *name, int directory, uint64_t size) {
+    (void)name; (void)directory; (void)size;
+    ++*(int *)out;
+}
 int hos_prompts_romfs(const char *key,const char *mod,char *out,size_t cap) {
     if (!strcmp(key,"ui/prompt") && mod) saw_mod_prompt++;
     if (!strcmp(key,"ui/fixture.rsizetable.zs") && mod) {
@@ -23,8 +32,16 @@ int main(int argc,char **argv) {
     set_env("HOS_FS_DELAY_MS",NULL);set_env("HOS_FS_WATCH",NULL);set_env("HOS_FS_TRACE",NULL);
     hos_romfs_dir=argv[2];generated=argv[4];merged=argv[5];wide_file=argv[6];
     set_env("HOS_MODS",argv[3]);set_env("HOS_FS_OVERLAY",NULL);set_env("HOS_NO_MOVIES",NULL);
-    CHECK(mount("rom",hos_romfs_dir,0));CHECK(hos_fs_pack_open(argv[1]));
+    CHECK(!hos_fs_packed());
+    CHECK(mount("rom",hos_romfs_dir,0));CHECK(hos_fs_pack_open(argv[1]));CHECK(hos_fs_packed());
     hos_mods_init("authored-image");
+    int extras = 0;
+    attribute_calls = 0;
+    CHECK(hos_mods_dir_extras("", NULL, count_mod_entry, &extras) == extras && extras > 0);
+    CHECK(attribute_calls == 0);   /* NULL base must not issue any host filesystem probes. */
+    extras = 0;
+    CHECK(hos_mods_dir_extras("", hos_romfs_dir, count_mod_entry, &extras) == extras && extras > 0);
+    CHECK(attribute_calls > 0);   /* A real loose base still filters its existing entries. */
     CHECK(contents("rom:/pattern","LAST"));
     CHECK(contents("rom:/base-only","BASEONLY"));
     CHECK(contents("rom:/nested-only","NESTED"));

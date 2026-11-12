@@ -24,6 +24,8 @@ def run(cmd):
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--cxx',default='clang++')
+    parser.add_argument('--mods-source', type=Path, default=ROOT/'host/mods.c',
+                        help='explicit source override for causal negative controls')
     args=parser.parse_args()
     tree=ROOT
     spec=importlib.util.spec_from_file_location('authored_fs',ROOT/'tests/test_romfs_pack_fs.py')
@@ -51,7 +53,11 @@ def main():
         overlay=folder/'overlay';put(overlay/'pattern',b'OVERLAY')
         (folder/'authored_hos.h').write_text(fixture.HOS,encoding='utf-8')
         for file in ('nn_fs.c','mods.c'):
-            text=(tree/'host'/file).read_text(encoding='utf-8')
+            text=(args.mods_source if file == 'mods.c' else tree/'host'/file).read_text(encoding='utf-8')
+            if file == 'mods.c':
+                text=text.replace('#include <windows.h>', '#include <windows.h>\n'
+                    'DWORD authored_mod_attributes(const char *path);\n'
+                    '#undef GetFileAttributesA\n#define GetFileAttributesA authored_mod_attributes')
             (folder/file).write_text(text.replace('#include "hos.h"','#include "authored_hos.h"'),encoding='utf-8')
         (folder/'driver.c').write_text(driver,encoding='utf-8')
         exe=folder/('probe.exe' if os.name=='nt' else 'probe')

@@ -85,6 +85,7 @@ static BOOL fs_FindNextFile(HANDLE h, WIN32_FIND_DATAA *fd) {
 const char *hos_romfs_dir, *hos_user_dir;
 static RomfsPackFile romfs_image;
 static void close_romfs_image(void) { romfs_pack_file_close(&romfs_image); }
+int hos_fs_packed(void) { return romfs_image.pack.read != NULL; }
 /* Called once at startup, before guest threads; the image lives until process teardown. */
 int hos_fs_pack_open(const char *path) {
     if (!path) return 1;
@@ -675,7 +676,7 @@ static const char *rom_rel(const char *guest) {   /* the path inside the RomFS m
 static int is_mod_dir(const char *guest) {
     const char *rel = rom_rel(guest);
     int n = 0;
-    if (rel) hos_mods_dir_extras(rel, "<", count_extra, &n);   /* ("<": no such folder: every entry counts) */
+    if (rel) hos_mods_dir_extras(rel, NULL, count_extra, &n);   /* no loose base: every mod entry counts */
     return n > 0;
 }
 
@@ -737,7 +738,7 @@ HLE(_ZN2nn2fs13OpenDirectoryEPNS0_15DirectoryHandleEPKci) {
             dh->pack_dir.cursor = romfs_image.pack.count;
             dh->find_done = 1;
         }
-        hos_mods_dir_extras(rel, "<", add_pack_extra, dh);
+        hos_mods_dir_extras(rel, NULL, add_pack_extra, dh);
     } else {
         snprintf(dh->path, sizeof dh->path, "%s", pat);   /* (for GetDirectoryEntryCount) */
         dh->find = FindFirstFileA(pat, &dh->fd);
