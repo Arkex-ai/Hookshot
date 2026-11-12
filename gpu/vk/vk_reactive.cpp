@@ -48,8 +48,8 @@ struct State {
     VkPipeline pipe = VK_NULL_HANDLE;
     VkSampler point = VK_NULL_HANDLE;
     bool tried = false;
-    struct Dead { uint64_t frame; std::function<void()> free; };
-    std::vector<Dead> dead;   // (what work in flight may still use: freed a few frames on)
+    struct Dead { uint64_t value; std::function<void()> free; };
+    std::vector<Dead> dead;   // GPU resources retired against the next covering submission signal.
     const char* reason = nullptr;
     bool told = false;
     uint64_t masks = 0;
@@ -72,12 +72,13 @@ float env_float(const char* name, float otherwise, float lo, float hi) {
     return v >= lo && v <= hi ? v : otherwise;   // (and a NaN is neither)
 }
 
-void later(std::function<void()> f) { st().dead.push_back({texture_frame_no(), std::move(f)}); }
+void later(std::function<void()> f) { st().dead.push_back({vk_retirement_value(), std::move(f)}); }
 void free_dead() {
     State& s = st();
-    const uint64_t now = texture_frame_no();
+    if (s.dead.empty()) return;
+    const uint64_t now = vk_timeline_completed();
     for (size_t i = 0; i < s.dead.size();) {
-        if (now - s.dead[i].frame > 4) {
+        if (s.dead[i].value && now >= s.dead[i].value) {
             s.dead[i].free();
             s.dead[i] = std::move(s.dead.back());
             s.dead.pop_back();
@@ -188,6 +189,12 @@ VkImageView scene_view(const Texture* t, uint32_t level, uint32_t layer) {
 }
 
 } // namespace
+
+void collect_retired() {
+    State& s = st();
+    std::lock_guard lk(s.mu);
+    free_dead();
+}
 
 bool wanted() {
     static const bool on = [] {

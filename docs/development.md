@@ -184,6 +184,18 @@ case-sensitive, and an unknown one is ignored.
 | `RX_VK_FIFO=1`, `RX_VK_IMMEDIATE=1` | V-Sync On (FIFO) or Off (immediate) for one run, over the menu's V-Sync row |
 | `HOS_VCORES=0`, `HOS_CORES=<1..8>`, `HOS_RESERVE_CORE=0` | No virtual cores; the cores the game sees (6); no core kept for the replay (one is, with 8 or more logical processors) |
 
+#### Deferred GPU resource lifetime
+
+The FSR 3.1 inputs, reactive mask and temporal chain retire callbacks against
+`vk_retirement_value()`, then reclaim them only after `vk_timeline_completed()`
+reaches that value. Zero means that no safe completion value is available and
+must retain the resource. CPU frame age is not GPU completion. Each present
+collects completed callbacks under the replay lock, even after switching away
+from the upscaler. The temporal engine's existing 120-frame live-cache policy
+is separate and unchanged. `tests/test_gpu_callback_retirement.py` exercises
+pending work, idle collection, captured contexts and replay/state locking
+without a game or GPU; `--source` runs those assertions on another source tree.
+
 ### Building
 
 A build reads and writes tens of gigabytes. When the game folder or the build files folder is on a hard drive,

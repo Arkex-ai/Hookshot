@@ -207,8 +207,8 @@ struct State {
     uint64_t engines_made = 0;  // (prepare's new histories: a feature or context made again, each a stall in play)
     float status_jitter[2]{};   // (the last evaluation's jitter, in render pixels, and whether it had motion)
     bool status_motion = false;
-    struct Dead { uint64_t frame; std::function<void()> free; };
-    std::vector<Dead> dead;   // (what work in flight may still use: freed a few frames on)
+    struct Dead { uint64_t value; std::function<void()> free; };
+    std::vector<Dead> dead;   // GPU resources retired against the next covering submission signal.
     uint64_t asked = 0;       // (the frame an upscale last asked for an engine: temporal_idle)
     std::atomic<bool> holding{false};   // (an engine's state, images or frees still to do: temporal_idle has something to let go)
 };
@@ -255,12 +255,17 @@ bool fail(const char* why) {   // (the network runs: why, when it changes and ev
     return false;
 }
 
-void later(std::function<void()> f) { st().dead.push_back({texture_frame_no(), std::move(f)}); }
-void free_dead(bool all) {
+void later(std::function<void()> f) {
     State& s = st();
-    const uint64_t now = texture_frame_no();
+    s.dead.push_back({vk_retirement_value(), std::move(f)});
+    s.holding.store(true, std::memory_order_relaxed);
+}
+void free_dead() {
+    State& s = st();
+    if (s.dead.empty()) return;
+    const uint64_t now = vk_timeline_completed();
     for (size_t i = 0; i < s.dead.size();) {
-        if (all || now - s.dead[i].frame > 4) {
+        if (s.dead[i].value && now >= s.dead[i].value) {
             s.dead[i].free();
             s.dead[i] = std::move(s.dead.back());
             s.dead.pop_back();
@@ -765,6 +770,7 @@ void temporal_idle() {
     State& s = st();
     if (!s.holding.load(std::memory_order_relaxed)) return;
     std::lock_guard lk(s.mu);
+    free_dead();   // Completed retirements drain even while the live engine is intentionally cached.
     const uint64_t now = texture_frame_no();
     if (now - s.asked <= 120) return;   // (in use, or off for under 120 frames (2 s): kept, a row stepped through comes back at once)
     // (hookshot, a stutter: kept too while DLSS or FSR 4 is still the Upscaler's choice. Each area change's loading screen has no
@@ -781,7 +787,7 @@ void temporal_idle() {
     }
     drop_all();
     s.last_frame = 0;   // (a new history when it comes back)
-    free_dead(false);
+    free_dead();
     s.holding = !s.dead.empty();
 }
 
@@ -890,7 +896,7 @@ bool temporal_upscale(VkCommandBuffer cmd, uint64_t key, bool known, Texture* in
                                             (unsigned long long)key, in->width, in->height, out->width >> out_level,
                                             out->height >> out_level);
     }
-    free_dead(false);
+    free_dead();
     if (known && out && out->format == VK_FORMAT_B10G11R11_UFLOAT_PACK32) note_output(out, out_level);
     const Camera cam = s.cam;
     s.cam.valid = false;   // (each frame's own camera)

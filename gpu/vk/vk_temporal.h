@@ -68,6 +68,7 @@ bool temporal_upscale(VkCommandBuffer cmd, uint64_t key, bool known, Texture* in
 /// Once a frame (the game's present): after 120 frames without an upscale by an engine (off, or the upscale not taken) the
 /// engine's own state, the chain's images and deferred frees are let go, so their video memory comes back. Nothing to do
 /// costs one atomic load
+// Caller holds the replay lock: deferred destruction uses the covering GPU timeline.
 void temporal_idle();
 void temporal_reset_failure();
 

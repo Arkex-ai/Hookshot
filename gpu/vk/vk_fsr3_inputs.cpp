@@ -73,8 +73,8 @@ struct State {
     Frame frame;              // (the last one prepared: take())
     bool have_frame = false;
     TemporalJitter jitter;
-    struct Dead { uint64_t frame; std::function<void()> free; };
-    std::vector<Dead> dead;   // (what work in flight may still use: freed a few frames on)
+    struct Dead { uint64_t value; std::function<void()> free; };
+    std::vector<Dead> dead;   // GPU resources retired against the next covering submission signal.
     const char* reason = nullptr;
     int reason_repeats = 0;
     bool told = false;
@@ -91,12 +91,13 @@ bool fail(const char* why) {   // (why, when it changes and every 600th time)
     return false;
 }
 
-void later(std::function<void()> f) { st().dead.push_back({texture_frame_no(), std::move(f)}); }
+void later(std::function<void()> f) { st().dead.push_back({vk_retirement_value(), std::move(f)}); }
 void free_dead() {
     State& s = st();
-    const uint64_t now = texture_frame_no();
+    if (s.dead.empty()) return;
+    const uint64_t now = vk_timeline_completed();
     for (size_t i = 0; i < s.dead.size();) {
-        if (now - s.dead[i].frame > 4) {
+        if (s.dead[i].value && now >= s.dead[i].value) {
             s.dead[i].free();
             s.dead[i] = std::move(s.dead.back());
             s.dead.pop_back();
@@ -206,6 +207,12 @@ VkImageView depth_view(Texture* t) {
 }
 
 } // namespace
+
+void collect_retired() {
+    State& s = st();
+    std::lock_guard lk(s.mu);
+    free_dead();
+}
 
 bool wanted() { return fsr3_wanted() || fsr3fi::frames_wanted() != 0; }
 

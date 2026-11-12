@@ -23,6 +23,9 @@ struct Texture;
 
 namespace reactive {
 
+/// Reclaim completed retirements without another upscale; caller holds the replay lock.
+void collect_retired();
+
 /// A frame's mask: R8_UNORM, of the upscaler's inputs' size, set in its top left width x height
 struct Mask {
     VkImage image = VK_NULL_HANDLE;

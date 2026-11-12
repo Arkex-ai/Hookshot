@@ -25,6 +25,9 @@ struct Texture;
 
 namespace fsr3_inputs {
 
+/// Reclaim completed retirements without another upscale; caller holds the replay lock.
+void collect_retired();
+
 /// A frame's inputs, at the render size, in images of this file's own (written by prepare)
 struct Frame {
     VkImageView color = VK_NULL_HANDLE;    ///< RGBA16F: the network's input as it samples it, 0..1

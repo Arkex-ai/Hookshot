@@ -30,6 +30,7 @@
 #include <unordered_set>
 
 #include "vk_temporal.h"
+#include "vk_reactive.h"
 #include "vk_fsr3_inputs.h"   // (the camera jitter while AMD FSR 3.1 upscales)
 #include "status_line.h"
 #include "vk_reflex.h"
@@ -3370,7 +3371,6 @@ void do_present(const nvn_tex* t, const int crop[4]) {
     // (hookshot) NVIDIA Reflex (vk_reflex.cpp): this frame's simulation ended, its submission starts; on the way out (after the
     // present) the driver's sleep until the next frame should begin. AMD Anti-Lag 2 (vk_antilag.cpp) waits there as well: the
     // next frame's input stage
-    temporal_idle();   // (DLSS, FSR: their video memory let go once not used for a while)
     status_tick();   // (the status line, and the video-memory warning)
     reflex_present_begins();
     struct ReflexSleep { ~ReflexSleep() { FpsWait fw(fps_stats::kPace); reflex_sleep(); antilag_input(); } } reflex_sleep_after;
@@ -3391,6 +3391,9 @@ void do_present(const nvn_tex* t, const int crop[4]) {
         bench_frame(presents);
         SlowWatch slow("present");
         frame_submits.clear();
+        temporal_idle();   // Retirement stamps and engine release share the submission lock.
+        fsr3_inputs::collect_retired();
+        reactive::collect_retired();
         PROF(PROF_PRESENT);
         const uint64_t value = present_value ? present_value : ++q_values;
         present_value = 0;
