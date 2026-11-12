@@ -147,6 +147,8 @@ struct State {
     Engine engines[3];               // (DLSS, FSR 4, FSR 3.1: engine_of)
     const TemporalEngine* drawing = nullptr;   // (the engine that drew last: another one starts a new history)
     int drawn_mode = ur::GAME;
+    bool dlaa_waiting = false;
+    uint64_t dlaa_wait_frame = 0;
     Image color, depth, motion, output;
     VkDescriptorSetLayout prep_set = VK_NULL_HANDLE, out_set = VK_NULL_HANDLE;
     VkPipelineLayout prep_layout = VK_NULL_HANDLE, out_layout = VK_NULL_HANDLE;
@@ -925,10 +927,18 @@ bool temporal_upscale(VkCommandBuffer cmd, uint64_t key, bool known, Texture* in
     }
     const VkImageView dview = depth_view(cam.depth);
     if (!dview) return fail("no view of the scene depth");
-    // Keep upscaling the queued small scene until the guest renders at the requested native size.
+    // Give queued small scenes three frames to reach the requested native size.
+    // Some games keep a smaller scene even at full scale: then use native AA at that size.
     // Creating DLAA for that queued scene would replace the feature twice in successive frames.
     const bool entering_dlaa = mode == ur::DLAA && s.drawing == engine.e && s.drawn_mode == ur::DLSS;
-    const bool waiting_for_native = entering_dlaa && (rw != ow || rh != oh);
+    const bool queued_native = entering_dlaa && (rw != ow || rh != oh);
+    const uint64_t frame = texture_frame_no();
+    if (queued_native && !s.dlaa_waiting) s.dlaa_waiting = true, s.dlaa_wait_frame = frame;
+    const bool wait_expired = queued_native && (frame < s.dlaa_wait_frame || frame - s.dlaa_wait_frame >= 3);
+    if (wait_expired)
+        logf("vk: DLAA native scene still %ux%u after three frames; using it for output %ux%u", rw, rh, ow, oh);
+    const bool waiting_for_native = queued_native && !wait_expired;
+    if (!waiting_for_native) s.dlaa_waiting = false;
     const int draw_mode = waiting_for_native ? ur::DLSS : mode;
     if (s.drawing != engine.e) {   // (another engine than the one before: that one's state let go, and a new history)
         if (s.drawing) {

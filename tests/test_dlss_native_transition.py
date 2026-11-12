@@ -17,6 +17,7 @@ namespace ur = mkwvk::upscaler_rows;
 struct TestEngine {
     const char* name = "fixture";
     bool feature = false, feature_aa = false;
+    bool feature_hdr = false, requested_hdr = false;
     uint32_t feature_ow = 0, feature_oh = 0, feature_rw = 0, feature_rh = 0;
     uint32_t min_rw = 0, min_rh = 0;
     unsigned feature_preset = 0, creations = 0;
@@ -25,11 +26,13 @@ struct TestEngine {
                 uint32_t* in_w, uint32_t* in_h, const char**) {
         auto& s = *this;
         const unsigned preset = 0;
+        const bool hdr = requested_hdr;
         (void)native_aa;
         /* REUSE */
 
         // Model a scaled feature that can accept full-size input, just as NGX can.
         feature = true;
+        feature_hdr = hdr;
         feature_aa = rw == ow && rh == oh;
         feature_ow = feature_rw = ow;
         feature_oh = feature_rh = oh;
@@ -48,12 +51,20 @@ struct TestEngine {
 };
 
 struct Engine { TestEngine* e; };
-struct State { TestEngine* drawing = nullptr; uint64_t last_frame = 0; int drawn_mode = ur::GAME; };
-static int texture_frame_no() { return 1; }
+struct State {
+    TestEngine* drawing = nullptr;
+    uint64_t last_frame = 0;
+    int drawn_mode = ur::GAME;
+    bool dlaa_waiting = false;
+    uint64_t dlaa_wait_frame = 0;
+};
+static uint64_t fixture_frame = 0;
+static uint64_t texture_frame_no() { return fixture_frame; }
 static void descriptors_disturbed() {}
 template <class... Args> static void logf(const char*, Args...) {}
 
-static void step(State& s, Engine engine, int mode, uint32_t rw, uint32_t rh) {
+static void step(State& s, Engine engine, int mode, uint32_t rw, uint32_t rh, bool advance = true) {
+    if (advance) ++fixture_frame;
     const uint32_t ow = 3440, oh = 1440;
     const int cmd = 0;
     /* DISPATCH */
@@ -87,7 +98,35 @@ int main() {
     TestEngine startup_ngx;
     step(startup, {&startup_ngx}, ur::DLAA, 1720, 720);
     if (startup_ngx.creations != 1 || startup_ngx.feature_ow != 1720) return 5;
-    std::puts("PASS: queued scaled frames, native promotion, reuse and engine switch");
+
+    State undersized;
+    TestEngine small;
+    step(undersized, {&small}, ur::DLSS, 1720, 720);
+    for (int i = 0; i < 3; ++i) step(undersized, {&small}, ur::DLAA, 1720, 720);
+    if (small.creations != 1 || undersized.drawn_mode != ur::DLSS) return 6;
+    step(undersized, {&small}, ur::DLAA, 1720, 720);
+    step(undersized, {&small}, ur::DLAA, 1720, 720);
+    if (small.creations != 2 || !small.feature_aa || small.feature_ow != 1720 || undersized.drawn_mode != ur::DLAA) return 7;
+
+    already_native.requested_hdr = true;
+    step(auto_native, {&already_native}, ur::DLAA, 3440, 1440);
+    if (already_native.creations != 2 || !already_native.feature_hdr) return 8;
+    already_native.requested_hdr = false;
+    step(auto_native, {&already_native}, ur::DLAA, 3440, 1440);
+    if (already_native.creations != 3 || already_native.feature_hdr) return 9;
+
+    State repeated;
+    TestEngine same_frame;
+    step(repeated, {&same_frame}, ur::DLSS, 1720, 720);
+    step(repeated, {&same_frame}, ur::DLAA, 1720, 720);
+    for (int i = 0; i < 5; ++i) step(repeated, {&same_frame}, ur::DLAA, 1720, 720, false);
+    if (same_frame.creations != 1 || repeated.drawn_mode != ur::DLSS) return 10;
+    step(repeated, {&same_frame}, ur::DLSS, 1720, 720);
+    for (int i = 0; i < 3; ++i) step(repeated, {&same_frame}, ur::DLAA, 1720, 720);
+    if (same_frame.creations != 1 || repeated.drawn_mode != ur::DLSS) return 11;
+    step(repeated, {&same_frame}, ur::DLAA, 1720, 720);
+    if (same_frame.creations != 2 || repeated.drawn_mode != ur::DLAA) return 12;
+    std::puts("PASS: queued scenes, bounded native wait, reuse, HDR and engine switch");
 }
 '''
 
