@@ -1,10 +1,9 @@
-# Optional packed RomFS (development candidate)
+# Optional packed RomFS
 
-This branch is unfinished: writer, reader, nn_fs file/directory paths, startup selection and native font reads have authored checks,
-but broader image-backed compatibility validation is incomplete. Do not remove an extracted RomFS folder or
-use this as a release feature.
+The native desktop game can read assets from an optional indexed image. Keep the extracted RomFS folder:
+building and updating still require it. Image creation copies the assets and does not remove the source.
 
-The intended delivery is an optional read-only asset backend with the existing folder backend, mod ordering,
+This is an optional read-only asset backend with the existing folder backend, mod ordering,
 generated prompts, ultrawide redirects and native menu fonts preserved. Writable saves, cache and temporary mounts
 stay separate. Loading-time benefits need comparable measurements; fewer host files alone does not prove faster
 loading, lower memory use or less retained disk space.
@@ -60,8 +59,18 @@ Desktop selection: pass `--romfs-pack <file>` to the native game executable. It 
 the image before guest memory is reserved. Missing/invalid/unreadable images stop startup with a diagnostic; remove
 the option explicitly to return to the folder backend. `--romfs` retains its folder-root meaning for mounts/overrides.
 Paths follow the normal startup working directory. Browser builds reject packed-image selection. Shader-only
-preparation does not need the image. This branch still needs complete host/game and font-source validation before
-these commands are suitable for a release.
+preparation does not need the image.
+
+For example, from a built game folder on Windows:
+
+```powershell
+bin/hookshot.exe image.bin --romfs-pack game.hromfs --user user
+```
+
+On Linux use `bin/hookshot` with the same arguments. The required `image.bin` contains the native game's
+program data; `game.hromfs` is the separate asset container. Generated prompt assets remain beside the game.
+The outer launcher does not automatically select this backend: pass the flag to the native executable.
+Close the game before replacing its packed image.
 
 `host/romfs_pack.h` owns a bounded immutable index and entry table. Its caller owns the backing file and supplies
 positional reads with actual byte counts and a stable lifetime. Failed open leaves the caller's prior value unchanged; close frees
@@ -91,6 +100,17 @@ Windows directory metadata may report an allocation size or zero between scans. 
 payload size as zero while retaining identity, permissions, timestamps and complete membership checks. File size
 and before/after read checks remain strict. A replaced directory still aborts publication and preserves prior output.
 
-Still required before release: image-backed game and generated-prompt/mod integration validation, final exact-head
-native build and full regressions. The host font callback uses renderer interface version19; explicit image selection
-and authored Windows case/path parity are implemented. No image/index/game-derived fixture is shipped.
+## Validation and limits
+
+On source `bdefcade`, the Windows native build and matching guest generation passed. Folder and image-only
+runs loaded the same disposable Kokiri checkpoint, displayed generated Xbox prompts and native menu fonts,
+and exited successfully without changing the source checkpoint. The image-only run had no loose RomFS root.
+A private complete-corpus comparison checked 186,583 files, 598 directories and 26,236,422,768 payload bytes
+through the actual guest filesystem implementation against separate native folder reads.
+
+Eighteen focused Windows/Linux jobs passed, including corrupt-input and causal regression controls. Full local
+suites had the same failures on the candidate and its exact base `ef81aee7`: Linux 454/1/24 versus 447/1/24,
+Windows 442/4/33 versus 435/4/33 (passed/failed/skipped). These are not all-green full-suite results.
+Linux source tests do not prove Linux gameplay. The Windows runs cover early gameplay and menus, not the
+campaign, deterministic frame equivalence, loading speed or memory savings. The host font callback uses renderer
+interface version19. No image/index/game-derived fixture is shipped.
