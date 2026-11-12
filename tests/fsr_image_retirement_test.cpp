@@ -121,6 +121,20 @@ void freed(uintptr_t id) { need(bundles[id].views == 3 && bundles[id].image, "co
 int main(int argc, char** argv) {
     need(argc == 2, "case required");
     const char* mode = argv[1];
+#ifdef FSR3_IDLE_TEST
+    if (!std::strcmp(mode, "idle-after-switch")) {
+        retire(1, 21);
+        gpu_done = 20;
+        collect_retired(); // Present after leaving FSR 3.1; no new FSR 3.1 dispatch.
+        retained(1);
+        for (unsigned i = 0; i < 100; i++) { cpu_frames++; collect_retired(); retained(1); }
+        gpu_done = 21;
+        collect_retired();
+        freed(1);
+        collect_retired(); // No double free.
+        return 0;
+    }
+#endif
     if (!std::strncmp(mode, "queue-", 6)) {
         gpu_done = 20;
         batched = !std::strcmp(mode, "queue-batch");

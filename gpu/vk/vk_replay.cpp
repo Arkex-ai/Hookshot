@@ -31,6 +31,7 @@
 
 #include "vk_temporal.h"
 #include "vk_fsr3_inputs.h"   // (the camera jitter while AMD FSR 3.1 upscales)
+#include "vk_fsr3.h"          // (retire old FSR 3.1 images after leaving its upscaler)
 #include "status_line.h"
 #include "vk_reflex.h"
 #include "vk_antilag.h"
@@ -3388,6 +3389,7 @@ void do_present(const nvn_tex* t, const int crop[4]) {
     VkImage made_src = VK_NULL_HANDLE;
     {
         std::lock_guard lk(replay_mu);
+        fsr3::collect_retired();   // The last FSR 3.1 engine release may have left GPU work in flight.
         bench_frame(presents);
         SlowWatch slow("present");
         frame_submits.clear();

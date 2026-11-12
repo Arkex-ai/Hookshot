@@ -62,6 +62,9 @@ struct Inputs {
 /// (hookshot) Lets the internal images go (freed once the GPU's uses of them are done); the next prepare_sizes or upscale makes
 /// them again. vk_fsr3.cpp's engine of the temporal chain calls it when the chain stops drawing with FSR 3.1
 void release();
+/// Drain images released by a previous size or engine while FSR 3.1 is not evaluating. Non-blocking: only a completed
+/// Vulkan timeline value makes a retired image safe to destroy. Called once per present under the replay lock.
+void collect_retired();
 /// (hookshot) The video memory its internal images hold now, in bytes (the chain's status line: vk_fsr3.cpp chain_memory)
 [[nodiscard]] uint64_t memory();
 

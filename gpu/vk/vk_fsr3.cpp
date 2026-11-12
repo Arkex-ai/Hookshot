@@ -509,6 +509,10 @@ uint64_t memory() {
     return sum;
 }
 
+void collect_retired() {
+    if (!g.dead.empty()) free_dead();  // The last FSR 3.1 release may be before the GPU finishes its images.
+}
+
 void release() {
     for (Image* t : all_images()) drop_image(*t);   // (retired: freed once the GPU's uses of them are done)
     g.render_width = g.render_height = g.upscale_width = g.upscale_height = 0;
