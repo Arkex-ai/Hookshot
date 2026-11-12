@@ -77,8 +77,7 @@ def main():
     need("wait_for_present(dev.device, sc, id, 20000000ull)" in loop and "dev.swap_mode == VK_PRESENT_MODE_FIFO_KHR" in loop,
          "under FIFO the presenter does not wait (with a limit) for its present to be shown")
     need("UINT64_MAX" not in loop, "a wait without end on the presenter")
-    wait_idle = block(main_cpp, "") if False else replay[replay.index("void device_wait_idle_locked() {"):]
-    wait_idle = wait_idle[:wait_idle.index("\n}") + 2]
+    wait_idle = block(replay, "VkResult device_wait_idle_locked() {")
     need("std::lock_guard pr(dev.presenter_queue_mu);" in wait_idle, "vkDeviceWaitIdle runs with the presenter's queue in use")
     need("presenter.busy = false" in loop and "notify_all" in loop, "the presenter does not say it is done")
     need("create_swapchain" not in loop and "reflex_presented" not in loop,

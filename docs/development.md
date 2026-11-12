@@ -190,6 +190,9 @@ After frame generation stays disabled for 120 presents, its size-dependent
 input, luma, flow and output-set images can be released. The cooldown is only
 a cache policy: the collector first requires no queued or displayed set and
 then uses the existing device-idle barrier under the presentation mutex.
+Only a successful device wait permits release. Allocation or other wait errors
+retain the images and postpone the next attempt for another cooldown; a CPU-frame
+count does not establish GPU completion. All queue locks are released on failure.
 Collection runs under the replay lock before the next present is recorded.
 This one-time barrier can affect the transition; it is not a frame-rate gain.
 Pipeline setup stays cached and re-enabling generation recreates the images.

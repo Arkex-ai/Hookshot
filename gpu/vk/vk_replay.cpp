@@ -252,11 +252,11 @@ void queue_flush() {
     std::lock_guard lk(dev.present_mu);
     queue_flush_locked();
 }
-void device_wait_idle_locked() {   // (dev.present_mu held)
+VkResult device_wait_idle_locked() {   // (dev.present_mu held)
     queue_flush_locked();
     std::lock_guard pq(dev.present_queue_mu);
     std::lock_guard pr(dev.presenter_queue_mu);   // (the presenter thread's queue too: every queue is idle-waited)
-    vkDeviceWaitIdle(dev.device);
+    return vkDeviceWaitIdle(dev.device);
 }
 namespace {
 void queue_flush_for(int why) {

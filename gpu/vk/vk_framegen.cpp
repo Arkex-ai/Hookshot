@@ -547,7 +547,14 @@ void framegen_idle() {
     // barrier as ensure_size(), not the CPU-frame cooldown or replay timeline.
     {
         std::lock_guard qk(dev.present_mu);
-        device_wait_idle_locked();
+        const VkResult result = device_wait_idle_locked();
+        if (result != VK_SUCCESS) {
+            // An allocation failure does not establish completion. Retain the
+            // images and retry after another cooldown, not on every present.
+            fg.idle_frame = now;
+            logf("vk: frame interpolation: idle images retained (device wait failed: %d)", (int)result);
+            return;
+        }
     }
     drop_size();
     fg.idle_frame = 0;

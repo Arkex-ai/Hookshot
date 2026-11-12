@@ -19,7 +19,8 @@ ROOT = Path(__file__).resolve().parents[1]
 CASES = (
     "empty", "active", "cooldown", "off-releases", "once", "pending-job",
     "busy-set", "gpu-pending", "re-enable", "frame-rewind", "rebuild",
-    "null-images", "queue-mutex",
+    "null-images", "queue-mutex", "host-oom", "device-oom", "unknown-error",
+    "failure-reenable", "device-lost",
 )
 
 
@@ -111,7 +112,10 @@ def main() -> int:
     production = "\n".join(block(source, name) for name in ("void drop_img(", "void drop_size("))
     # No idle entry on the base is a behavioral failure, not a compiler failure.
     idle = block(source, "void framegen_idle()") if "void framegen_idle()" in source else "void framegen_idle() {}"
-    code = fixture.replace("// DROP_PRODUCTION", production).replace("// IDLE_PRODUCTION", idle)
+    wait_marker = "VkResult device_wait_idle_locked()" if "VkResult device_wait_idle_locked()" in replay else "void device_wait_idle_locked()"
+    wait = block(replay, wait_marker)
+    code = (fixture.replace("// WAIT_PRODUCTION", wait).replace("// DROP_PRODUCTION", production)
+            .replace("// IDLE_PRODUCTION", idle))
     passed = failed = 0
     with test_directory() as folder:
         for name, text, cases in (("lifetime", code, CASES), ("wiring", wiring(replay), (None,))):

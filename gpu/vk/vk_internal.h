@@ -36,7 +36,7 @@ void queue_flush_locked();   // (vk_replay.cpp, RX_VK_BATCH: held submits out; d
 void queue_flush();          // (the same, taking dev.present_mu)
 // (hookshot) held submits out, then vkDeviceWaitIdle with the present queue's lock taken too (dev.present_mu held): the device's
 // every queue is synchronized by the host around it
-void device_wait_idle_locked();
+VkResult device_wait_idle_locked();   // Check success before reclaiming resources that GPU work may still use.
 
 struct Device {
     VkInstance instance = VK_NULL_HANDLE;

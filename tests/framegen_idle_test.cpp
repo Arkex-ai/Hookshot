@@ -52,7 +52,7 @@ struct State {
     OutSet *recorded = nullptr;
 } fg;
 struct {
-    TrackingMutex present_mu;
+    TrackingMutex present_mu, present_queue_mu, presenter_queue_mu;
     unsigned device = 1;
 } dev;
 uint64_t frame_no = 1;
@@ -62,13 +62,27 @@ std::vector<unsigned> order;
 bool framegen_on() { return enabled; }
 uint64_t texture_frame_no() { return frame_no; }
 void logf(const char *, ...) { ++logs; }
-void device_wait_idle_locked() {
-    need(dev.present_mu.held, "device wait under presentation mutex");
-    need(!fg.mu.held, "do not wait GPU under job queue mutex");
-    ++waits;
-    gpu_pending = false;
-    order.push_back(1);
+using VkResult = int;
+constexpr VkResult VK_SUCCESS = 0, VK_ERROR_OUT_OF_HOST_MEMORY = -1, VK_ERROR_OUT_OF_DEVICE_MEMORY = -2,
+                   VK_ERROR_DEVICE_LOST = -4, VK_ERROR_UNKNOWN = -13;
+VkResult wait_result = VK_SUCCESS;
+unsigned flushes = 0;
+void queue_flush_locked() {
+    need(dev.present_mu.held, "flush under presentation mutex");
+    ++flushes;
 }
+VkResult vkDeviceWaitIdle(unsigned device) {
+    need(device == dev.device, "wait on the owned device");
+    need(dev.present_mu.held && dev.present_queue_mu.held && dev.presenter_queue_mu.held,
+         "device wait synchronizes every queue");
+    need(!fg.mu.held, "do not wait GPU under job queue mutex");
+    need(flushes == waits + 1, "held submissions flushed before each device wait");
+    ++waits;
+    if (wait_result == VK_SUCCESS || wait_result == VK_ERROR_DEVICE_LOST) gpu_pending = false;
+    order.push_back(1);
+    return wait_result;
+}
+// WAIT_PRODUCTION
 void vkDestroyImageView(unsigned, unsigned, void *) {
     need(!gpu_pending, "view cannot be destroyed with GPU work pending");
     ++views;
@@ -248,6 +262,47 @@ int main(int argc, char **argv) {
              "cleanup proceeds after mutex unlock");
         worker.get();
         need(waits == 1 && drops == 30, "locked cleanup completed");
+    } else if (!std::strcmp(c, "host-oom") || !std::strcmp(c, "device-oom") ||
+               !std::strcmp(c, "unknown-error") || !std::strcmp(c, "failure-reenable")) {
+        populate();
+        go_off();
+        wait_result = !std::strcmp(c, "device-oom") ? VK_ERROR_OUT_OF_DEVICE_MEMORY
+                    : !std::strcmp(c, "unknown-error") ? VK_ERROR_UNKNOWN : VK_ERROR_OUT_OF_HOST_MEMORY;
+        after_cooldown();
+        need(live() == 30 && gpu_pending && waits == 1 && !drops && !views,
+             "failed wait cannot prove completion or release any image or view");
+        need(!dev.present_mu.held && !dev.present_queue_mu.held && !dev.presenter_queue_mu.held,
+             "failed wait releases all queue locks");
+        if (!std::strcmp(c, "failure-reenable")) {
+            enabled = true;
+            frame_no = 123;
+            framegen_idle();
+            need(live() == 30 && waits == 1 && !fg.idle_frame, "re-enable after failure retains usable images");
+            enabled = false;
+            frame_no = 124;
+            framegen_idle();
+            frame_no = 245;
+        } else {
+            for (frame_no = 123; frame_no <= 242; ++frame_no) framegen_idle();
+            need(live() == 30 && waits == 1, "failed wait is not retried every present");
+            frame_no = 243;
+        }
+        wait_result = VK_SUCCESS;
+        framegen_idle();
+        need(live() == 0 && drops == 30 && views == 30 && waits == 2,
+             "confirmed completion after failure releases each resource exactly once");
+        framegen_idle();
+        need(drops == 30 && waits == 2, "no repeat release after successful retry");
+    } else if (!std::strcmp(c, "device-lost")) {
+        populate();
+        go_off();
+        wait_result = VK_ERROR_DEVICE_LOST;
+        after_cooldown();
+        // Vulkan permits destruction after device loss. Conservatively retaining
+        // these images for the renderer's existing device-loss exit is safe too.
+        need(waits == 1 && (live() == 30 || live() == 0), "device loss has no partial destruction");
+        need(!dev.present_mu.held && !dev.present_queue_mu.held && !dev.presenter_queue_mu.held,
+             "device loss releases queue locks");
     } else
         need(false, "unknown case");
     std::printf("PASS %s (%u checks)\n", c, checks);
