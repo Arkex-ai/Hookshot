@@ -96,7 +96,9 @@ static void bury_locked(Obj *o) {
     if (keep < 0) keep = env_on("HOS_KEEP_DEAD_OBJECTS");
     if (keep) return;
     const int64_t now = hos_now_ns();
-    while (grave_count && now - grave_times[grave_head] > 30000000000LL) {
+    size_t remaining = grave_count;
+    while (remaining && grave_count && now - grave_times[grave_head] > 30000000000LL) {
+        remaining--;
         Obj *d = graves[grave_head];
         grave_head = (grave_head + 1) % grave_cap;
         grave_count--;
@@ -107,6 +109,13 @@ static void bury_locked(Obj *o) {
             d->links = NULL;
             d->spare = spares;
             spares = d;
+        } else {
+            /* Still linked (or in use): retain its retirement record and retry later.
+               Dropping it here loses the only route back to the spare list after unlink. */
+            const size_t tail = (grave_head + grave_count) % grave_cap;
+            graves[tail] = d;
+            grave_times[tail] = now;
+            grave_count++;
         }
     }
     if (grave_count == grave_cap) {
